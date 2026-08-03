@@ -115,6 +115,9 @@
   .card .cname{ font-weight:700; font-size:12.5px; margin-top:1px; }
   .card .caff{ color: var(--ink-soft); font-size:10.5px; }
   .card .ceffect{ color: var(--ink-soft); font-size:10px; }
+  .counter-row{ display:flex; align-items:center; gap:5px; font-size:10.5px; margin-top:3px; padding-top:3px; border-top:1px dashed rgba(0,0,0,0.12); color: var(--ink); font-weight:600; }
+  .counter-row button{ width:17px; height:17px; line-height:15px; padding:0; font-size:12px; border-radius:3px; border:1px solid rgba(0,0,0,0.2); background:#efe9da; cursor:pointer; }
+  .counter-row button:hover{ background:#e2d9c2; }
   .card.back{ background: repeating-linear-gradient(45deg, var(--seat-b), var(--seat-b) 6px, #2e5f5a 6px, #2e5f5a 12px); cursor:default; }
   .card.back.A{ background: repeating-linear-gradient(45deg, var(--seat-a), var(--seat-a) 6px, #a56e26 6px, #a56e26 12px); }
 
@@ -212,7 +215,7 @@ function runApp(){
       deckName: "",
       commander: { affiliation:"", name:"", effect:"" },
       cards: [],
-      formCard: { color:"", name:"", affiliation:"", status:"", seinenba:"", effect1:"", effect2:"" },
+      formCard: { color:"", name:"", affiliation:"", status:"", seinenba:"", effect1:"", effect2:"", counterLabel:"", qty:"1" },
       bulkText: ""
     };
   }
@@ -322,30 +325,43 @@ function runApp(){
   }
 
   // ---------------- deck builder helpers ----------------
+  function cardSignature(c){
+    return [c.color,c.name,c.affiliation,c.status,c.seinenba,c.effect1,c.effect2,c.counterLabel||""].join("\u0001");
+  }
   function addDraftCard(){
     const f = draft.formCard;
     if(!f.name.trim()){ errorMsg = "カード名を入力してください。"; render(); return; }
     const statusNum = parseInt(f.status, 10);
     const seinenbaNum = parseInt(f.seinenba, 10);
-    draft.cards.push({
-      id: uid(), color: f.color.trim(), name: f.name.trim(), affiliation: f.affiliation.trim(),
-      status: isNaN(statusNum) ? 0 : statusNum, seinenba: isNaN(seinenbaNum) ? 0 : seinenbaNum,
-      effect1: f.effect1.trim(), effect2: f.effect2.trim()
-    });
-    draft.formCard = { color:f.color, name:"", affiliation:f.affiliation, status:"", seinenba:"", effect1:"", effect2:"" };
+    let qty = parseInt(f.qty, 10);
+    if(isNaN(qty) || qty < 1) qty = 1;
+    for(let i=0;i<qty;i++){
+      draft.cards.push({
+        id: uid(), color: f.color.trim(), name: f.name.trim(), affiliation: f.affiliation.trim(),
+        status: isNaN(statusNum) ? 0 : statusNum, seinenba: isNaN(seinenbaNum) ? 0 : seinenbaNum,
+        effect1: f.effect1.trim(), effect2: f.effect2.trim(), counterLabel: f.counterLabel.trim()
+      });
+    }
+    draft.formCard = { color:f.color, name:"", affiliation:f.affiliation, status:"", seinenba:"", effect1:"", effect2:"", counterLabel:f.counterLabel, qty:"1" };
     errorMsg = ""; render();
   }
-  function removeDraftCard(id){ draft.cards = draft.cards.filter(c => c.id !== id); render(); }
+  function removeDraftCardGroup(signature){ draft.cards = draft.cards.filter(c => cardSignature(c) !== signature); render(); }
   function cardsToBulkText(){
-    return draft.cards.map(c => [c.color,c.name,c.affiliation,c.status,c.seinenba,c.effect1,c.effect2].join("|")).join("\n");
+    return draft.cards.map(c => [c.color,c.name,c.affiliation,c.status,c.seinenba,c.effect1,c.effect2,c.counterLabel||""].join("|")).join("\n");
   }
   function parseBulkText(text){
     const lines = text.split("\n").map(l=>l.trim()).filter(Boolean);
-    return lines.map(line => {
+    const out = [];
+    lines.forEach(line => {
       const parts = line.split("|").map(p => p.trim());
-      const [color="", name="", affiliation="", status="", seinenba="", effect1="", effect2=""] = parts;
-      return { id: uid(), color, name, affiliation, status: parseInt(status,10) || 0, seinenba: parseInt(seinenba,10) || 0, effect1, effect2 };
+      const [color="", name="", affiliation="", status="", seinenba="", effect1="", effect2="", counterLabel="", qtyStr=""] = parts;
+      let qty = parseInt(qtyStr, 10);
+      if(isNaN(qty) || qty < 1) qty = 1;
+      for(let i=0;i<qty;i++){
+        out.push({ id: uid(), color, name, affiliation, status: parseInt(status,10) || 0, seinenba: parseInt(seinenba,10) || 0, effect1, effect2, counterLabel });
+      }
     });
+    return out;
   }
   function switchToBulk(){ draft.bulkText = cardsToBulkText(); deckTab = "bulk"; render(); }
   function switchToForm(){ if(draft.bulkText.trim()){ draft.cards = parseBulkText(draft.bulkText); } deckTab = "form"; render(); }
@@ -422,7 +438,7 @@ function runApp(){
     if(!preset){ errorMsg = "デッキの読み込みに失敗しました。"; render(); return; }
     const s = defaultSeatState();
     s.commander = { affiliation: preset.commander.affiliation, name: preset.commander.name, effect: preset.commander.effect };
-    s.deck = preset.cards.map(c => ({ ...c, id: uid() }));
+    s.deck = preset.cards.map(c => ({ ...c, id: uid(), counter: 0 }));
     s.submitted = true;
     addLog(s, `デッキ『${preset.name}』を登録した(本隊${s.deck.length}枚 + 指揮官)`);
     await saveSeat(mySeat, s);
@@ -437,6 +453,12 @@ function runApp(){
     addLog(s, "デッキをシャッフルしてゲームを開始した");
     await saveSeat(mySeat, s);
     screen = "game"; render();
+  }
+  async function redoDeckSelection(){
+    const s = defaultSeatState();
+    await saveSeat(mySeat, s);
+    state[mySeat] = s;
+    await enterDeckSetup();
   }
 
   // ---------------- game actions ----------------
@@ -470,6 +492,13 @@ function runApp(){
   function openHandCardMenu(cardId){ modal = { type:"handCard", cardId }; render(); }
   function openFieldCardMenu(cardId){ modal = { type:"fieldCard", cardId }; render(); }
   function openCommanderView(seat){ modal = { type:"commander", seat }; render(); }
+  async function adjustCounter(cardId, delta){
+    const s = state[mySeat];
+    const card = s.hand.find(c => c.id === cardId) || s.field.find(c => c.id === cardId) || s.discard.find(c => c.id === cardId);
+    if(!card) return;
+    card.counter = Math.max(0, (card.counter || 0) + delta);
+    await saveSeat(mySeat, s); render();
+  }
 
   async function playToField(cardId){
     const s = state[mySeat];
@@ -522,12 +551,13 @@ function runApp(){
     await saveSeat(mySeat, s); render();
   }
   function openDiscardPeek(seat){ modal = { type:"peekDiscard", seat }; render(); }
-  async function takeTopOfDiscard(){
+  async function pickFromDiscard(cardId){
     const s = state[mySeat];
-    if(s.discard.length === 0) return;
-    const card = s.discard.pop();
+    const idx = s.discard.findIndex(c => c.id === cardId);
+    if(idx === -1) return;
+    const [card] = s.discard.splice(idx, 1);
     s.hand.push(card);
-    addLog(s, `捨て札から『${card.name}』を手札に戻した`);
+    addLog(s, `捨て札から『${card.name}』を手札に加えた`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -549,6 +579,13 @@ function runApp(){
     detachRoomListeners();
     roomCode = ""; mySeat = null; screen = "home"; state = {A:null,B:null}; modal = null; errorMsg = "";
     render();
+  }
+  function confirmEndGame(){ modal = { type: "confirmEndGame" }; render(); }
+  async function doEndGame(){
+    const code = roomCode;
+    await Promise.all([ fbRemove(`rooms/${code}/A`), fbRemove(`rooms/${code}/B`) ]);
+    modal = null;
+    leaveRoom();
   }
   function randomCode(){
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -671,11 +708,22 @@ function runApp(){
   function renderPresetEditor(){
     const c = draft.commander;
     const f = draft.formCard;
-    const builtListHtml = draft.cards.map(card => `
+    const groups = [];
+    const groupMap = {};
+    draft.cards.forEach(card => {
+      const sig = cardSignature(card);
+      if(!groupMap[sig]){ groupMap[sig] = { sample: card, count: 0, sig }; groups.push(groupMap[sig]); }
+      groupMap[sig].count++;
+    });
+    const builtListHtml = groups.map(g => `
       <div class="built-row">
-        <span class="swatch" style="background:${colorSwatch(card.color)};"></span>
-        <span class="grow"><b>${escapeHtml(card.name)}</b><span style="opacity:0.6;"> / ${escapeHtml(card.affiliation||"—")} / ST ${card.status}(${fmtMod(card.seinenba)})</span></span>
-        <span class="del" data-id="${card.id}">削除</span>
+        <span class="swatch" style="background:${colorSwatch(g.sample.color)};"></span>
+        <span class="grow">
+          <b>${escapeHtml(g.sample.name)}</b>
+          <span style="opacity:0.6;"> / ${escapeHtml(g.sample.affiliation||"—")} / ST ${g.sample.status}(${fmtMod(g.sample.seinenba)})${g.sample.counterLabel ? ` / 「${escapeHtml(g.sample.counterLabel)}」カウンター` : ""}</span>
+          <span class="mono" style="opacity:0.7;"> ×${g.count}</span>
+        </span>
+        <span class="del" data-sig="${encodeURIComponent(g.sig)}">削除</span>
       </div>
     `).join("") || `<div class="empty-note">まだカードが登録されていません</div>`;
 
@@ -713,14 +761,18 @@ function runApp(){
             <div><label class="small-label">効果①(任意)</label><textarea id="fEffect1" style="min-height:60px;">${escapeHtml(f.effect1)}</textarea></div>
             <div><label class="small-label">効果②(任意)</label><textarea id="fEffect2" style="min-height:60px;">${escapeHtml(f.effect2)}</textarea></div>
           </div>
+          <div class="grid2 field-row">
+            <div><label class="small-label">カウンター名(任意・例: 海)</label><input type="text" id="fCounterLabel" value="${escapeHtml(f.counterLabel)}" placeholder="このカードにカウンターが乗らないなら空欄でOK"></div>
+            <div><label class="small-label">枚数(同じ内容のカードを一度に登録)</label><input type="number" id="fQty" value="${escapeHtml(f.qty)}" min="1" placeholder="1"></div>
+          </div>
           <button class="small-add full" id="addCardBtn">+ このカードをデッキに追加</button>
           <div class="built-list">${builtListHtml}</div>
         ` : `
           <div class="field-row">
-            <label class="small-label">1行1枚、「属性|名前|所属|ステータス|正念場修正値|効果①|効果②」の順で入力(効果は省略可)</label>
+            <label class="small-label">1行1枚、「属性|名前|所属|ステータス|正念場修正値|効果①|効果②|カウンター名|枚数」の順で入力(効果・カウンター名・枚数は省略可)</label>
             <textarea id="bulkInput" style="min-height:220px;">${escapeHtml(draft.bulkText)}</textarea>
           </div>
-          <div class="hint">正念場修正値がマイナスの場合はそのまま「-400」のように入力してください。</div>
+          <div class="hint">正念場修正値がマイナスの場合はそのまま「-400」のように入力してください。枚数を省略すると1枚として扱われます。</div>
         `}
 
         ${errorMsg ? `<div class="hint" style="color:#e2a08a; margin-top:12px;">${escapeHtml(errorMsg)}</div>` : ""}
@@ -741,10 +793,11 @@ function runApp(){
     if(deckTab === "form"){
       bindFormInputs([
         ["fColor","color"],["fStatus","status"],["fSeinenba","seinenba"],
-        ["fAffiliation","affiliation"],["fName","name"],["fEffect1","effect1"],["fEffect2","effect2"]
+        ["fAffiliation","affiliation"],["fName","name"],["fEffect1","effect1"],["fEffect2","effect2"],
+        ["fCounterLabel","counterLabel"],["fQty","qty"]
       ], draft.formCard);
       document.getElementById("addCardBtn").onclick = addDraftCard;
-      document.querySelectorAll(".del").forEach(el => { el.onclick = () => removeDraftCard(el.getAttribute("data-id")); });
+      document.querySelectorAll(".del").forEach(el => { el.onclick = () => removeDraftCardGroup(decodeURIComponent(el.getAttribute("data-sig"))); });
     } else {
       const ta = document.getElementById("bulkInput");
       ta.oninput = () => { draft.bulkText = ta.value; };
@@ -814,14 +867,16 @@ function runApp(){
         <h3 class="display" style="margin-top:0;">対戦準備</h3>
         <div class="status-line"><span class="pip ${mySub?'ready':''}"></span> あなた(席${mySeat}) — ${mySub ? `デッキ登録済み(本隊${mine.deck.length}枚)` : "未登録"}</div>
         <div class="status-line"><span class="pip ${oppSub?'ready':''}"></span> 相手(席${otherSeat(mySeat)}) — ${oppSub ? `デッキ登録済み(本隊${opp.deck.length}枚)` : "待機中..."}</div>
-        <div class="row" style="margin-top:16px;">
+        <div class="row" style="margin-top:16px; flex-wrap:wrap;">
           <button class="ghost" id="backBtn2">戻る</button>
+          <button class="ghost" id="redoBtn">デッキを選び直す</button>
           <button class="primary" id="startBtn" ${!mySub ? "disabled" : ""}>ゲーム開始(自分のデッキをシャッフル)</button>
         </div>
         <div class="hint">相手がまだ準備中でも、自分は先に開始できます。相手の画面はリアルタイムで自動更新されます。</div>
       </div>
     `;
     document.getElementById("backBtn2").onclick = leaveRoom;
+    document.getElementById("redoBtn").onclick = redoDeckSelection;
     document.getElementById("startBtn").onclick = startGame;
   }
 
@@ -831,7 +886,16 @@ function runApp(){
     const val = active ? (card.status + card.seinenba) : card.status;
     return `<span class="status ${active?'sein':''}">${val}</span> <span style="opacity:0.5; font-size:10px;">(通常${card.status} / 正念場${fmtMod(card.seinenba)})</span>`;
   }
-  function cardHtml(card, onclickName, seat){
+  function cardHtml(card, onclickName, seat, editableCounter){
+    const counterRow = card.counterLabel ? `
+      <div class="counter-row" onclick="event.stopPropagation();">
+        <span>${escapeHtml(card.counterLabel)}: ${card.counter||0}</span>
+        ${editableCounter ? `
+          <button onclick="event.stopPropagation(); adjustCounter('${card.id}',-1)">−</button>
+          <button onclick="event.stopPropagation(); adjustCounter('${card.id}',1)">＋</button>
+        ` : ""}
+      </div>
+    ` : "";
     return `
       <div class="card" onclick="${onclickName}('${card.id}')">
         <div class="toprow"><span class="swatch" style="background:${colorSwatch(card.color)};"></span>${statusHtml(card, seat)}</div>
@@ -839,6 +903,7 @@ function runApp(){
         <div class="caff">${escapeHtml(card.affiliation || "")}</div>
         ${card.effect1 ? `<div class="ceffect">①${escapeHtml(card.effect1)}</div>` : ""}
         ${card.effect2 ? `<div class="ceffect">②${escapeHtml(card.effect2)}</div>` : ""}
+        ${counterRow}
       </div>
     `;
   }
@@ -857,9 +922,9 @@ function runApp(){
 
     const bothStarted = mine.started && opp && opp.started;
     const oppHandBacks = opp ? opp.hand.map(()=>cardBackHtml(oppSeatKey)).join("") : "";
-    const oppFieldCards = opp ? opp.field.map(c => cardHtml(c, "noop", oppSeatKey)).join("") : "";
-    const myHandCards = mine.hand.map(c => cardHtml(c, "openHandCardMenu", mySeatKey)).join("");
-    const myFieldCards = mine.field.map(c => cardHtml(c, "openFieldCardMenu", mySeatKey)).join("");
+    const oppFieldCards = opp ? opp.field.map(c => cardHtml(c, "noop", oppSeatKey, false)).join("") : "";
+    const myHandCards = mine.hand.map(c => cardHtml(c, "openHandCardMenu", mySeatKey, true)).join("");
+    const myFieldCards = mine.field.map(c => cardHtml(c, "openFieldCardMenu", mySeatKey, true)).join("");
 
     let mergedLog = [];
     if(mine.log) mergedLog = mergedLog.concat(mine.log.map(e => ({...e, who: mySeatKey})));
@@ -875,6 +940,7 @@ function runApp(){
           <div class="row" style="align-items:center;">
             <span class="conn-badge ${connStatus[oppSeatKey] ? 'ok':'bad'}">${connStatus[oppSeatKey] ? '相手と接続中' : '相手の応答待ち'}</span>
             <button class="ghost" id="leaveBtn">退室</button>
+            <button class="ghost" id="endGameBtn" style="color:#e2a08a;">ゲーム終了</button>
           </div>
         </div>
 
@@ -923,6 +989,7 @@ function runApp(){
     `;
 
     document.getElementById("leaveBtn").onclick = leaveRoom;
+    document.getElementById("endGameBtn").onclick = confirmEndGame;
     document.getElementById("drawBtn").onclick = drawCard;
     document.getElementById("searchBtn").onclick = openSearch;
     document.getElementById("shuffleBtn").onclick = manualShuffle;
@@ -934,22 +1001,42 @@ function runApp(){
     window.openHandCardMenu = openHandCardMenu;
     window.openFieldCardMenu = openFieldCardMenu;
     window.openCommanderView = openCommanderView;
+    window.adjustCounter = adjustCounter;
     window.noop = function(){};
   }
 
-  function cardDetailBlock(card, seat){
+  function cardDetailBlock(card, seat, editableCounter){
     return `
       <div class="modal-detail-row"><b>${escapeHtml(card.name)}</b> ${card.affiliation ? `／ ${escapeHtml(card.affiliation)}` : ""}</div>
       <div class="modal-detail-row">属性: ${escapeHtml(card.color || "—")} ／ ${statusHtml(card, seat)}</div>
       ${card.effect1 ? `<div class="modal-detail-row">①${escapeHtml(card.effect1)}</div>` : ""}
       ${card.effect2 ? `<div class="modal-detail-row">②${escapeHtml(card.effect2)}</div>` : ""}
+      ${card.counterLabel ? `
+        <div class="modal-detail-row">
+          「${escapeHtml(card.counterLabel)}」カウンター: ${card.counter||0}
+          ${editableCounter ? `
+            <button class="act" style="padding:4px 10px; margin-left:8px;" onclick="adjustCounter('${card.id}',-1)">−1</button>
+            <button class="act" style="padding:4px 10px;" onclick="adjustCounter('${card.id}',1)">＋1</button>
+          ` : ""}
+        </div>
+      ` : ""}
     `;
   }
 
   function modalHtml(mine, opp, mySeatKey, oppSeatKey){
     if(!modal) return "";
+    if(modal.type === "confirmEndGame"){
+      return overlayWrap(`
+        <h3 class="display">ゲームを終了しますか？</h3>
+        <div class="hint">お互いの手札・場・山札などの情報がすべて破棄されます。終了後は同じ部屋番号で新しく対戦を始められます。</div>
+        <div class="row" style="margin-top:16px;">
+          <button class="ghost" id="modalCancel">キャンセル</button>
+          <button class="primary" id="modalConfirmEndGame" style="background:var(--danger); color:#fff;">終了する</button>
+        </div>
+      `);
+    }
     if(modal.type === "search"){
-      const cards = mine.deck.map(c => cardHtml(c, "pickFromSearch", mySeatKey)).join("");
+      const cards = mine.deck.map(c => cardHtml(c, "pickFromSearch", mySeatKey, false)).join("");
       return overlayWrap(`
         <h3 class="display">山札からサーチ</h3>
         <div class="hint">選んだ1枚を手札に加え、残りは自動でシャッフルされます。</div>
@@ -961,7 +1048,7 @@ function runApp(){
       const card = mine.hand.find(c => c.id === modal.cardId);
       if(!card){ modal = null; return ""; }
       return overlayWrap(`
-        <h3 class="display">カード詳細</h3>${cardDetailBlock(card, mySeatKey)}
+        <h3 class="display">カード詳細</h3>${cardDetailBlock(card, mySeatKey, true)}
         <div class="row" style="flex-wrap:wrap; margin-top:14px;">
           <button class="act" id="mPlay">場に出す</button>
           <button class="act" id="mDiscard">捨てる</button>
@@ -974,7 +1061,7 @@ function runApp(){
       const card = mine.field.find(c => c.id === modal.cardId);
       if(!card){ modal = null; return ""; }
       return overlayWrap(`
-        <h3 class="display">カード詳細</h3>${cardDetailBlock(card, mySeatKey)}
+        <h3 class="display">カード詳細</h3>${cardDetailBlock(card, mySeatKey, true)}
         <div class="row" style="flex-wrap:wrap; margin-top:14px;">
           <button class="act" id="mReturnHand">手札に戻す</button>
           <button class="act" id="mDiscardField">捨てる</button>
@@ -995,15 +1082,13 @@ function runApp(){
     }
     if(modal.type === "peekDiscard"){
       const target = modal.seat === mySeatKey ? mine : opp;
-      const cards = target ? target.discard.slice().reverse().map(c => cardHtml(c, "noop", modal.seat)).join("") : "";
-      const canTake = modal.seat === mySeatKey && target && target.discard.length > 0;
+      const isMine = modal.seat === mySeatKey;
+      const cards = target ? target.discard.slice().reverse().map(c => cardHtml(c, isMine ? "pickFromDiscard" : "noop", modal.seat, false)).join("") : "";
       return overlayWrap(`
         <h3 class="display">席${modal.seat}の捨て札</h3>
+        ${isMine ? `<div class="hint">クリックしたカードを手札に加えます。</div>` : ""}
         <div class="modal-cards">${cards || `<div class="empty-note">捨て札はありません</div>`}</div>
-        <div class="row" style="margin-top:10px;">
-          ${canTake ? `<button class="act" id="mTakeTop">一番上を手札に戻す</button>` : ""}
-          <button class="ghost" id="modalCancel">閉じる</button>
-        </div>
+        <div class="row" style="margin-top:10px;"><button class="ghost" id="modalCancel">閉じる</button></div>
       `);
     }
     return "";
@@ -1021,6 +1106,7 @@ function runApp(){
     const c = id => document.getElementById(id);
     if(c("modalCancel")) c("modalCancel").onclick = cancelModal;
     if(c("modalConfirmDelete")) c("modalConfirmDelete").onclick = () => doDeletePreset(modal.id);
+    if(c("modalConfirmEndGame")) c("modalConfirmEndGame").onclick = () => doEndGame();
   }
   function bindGameModalButtons(){
     const c = id => document.getElementById(id);
@@ -1030,11 +1116,12 @@ function runApp(){
     if(c("mReturn")) c("mReturn").onclick = () => returnToDeckTop(modal.cardId);
     if(c("mReturnHand")) c("mReturnHand").onclick = () => returnFieldToHand(modal.cardId);
     if(c("mDiscardField")) c("mDiscardField").onclick = () => discardFromField(modal.cardId);
-    if(c("mTakeTop")) c("mTakeTop").onclick = () => takeTopOfDiscard();
   }
 
   window.pickFromSearch = pickFromSearch;
+  window.pickFromDiscard = pickFromDiscard;
   window.openCommanderView = openCommanderView;
+  window.adjustCounter = adjustCounter;
   window.noop = function(){};
 
   render();
