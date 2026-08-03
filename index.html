@@ -101,6 +101,22 @@
   .zone-label{ font-size:11px; letter-spacing:0.08em; opacity:0.6; text-transform:uppercase; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; }
   .cards-row{ display:flex; flex-wrap:wrap; gap:10px; min-height: 96px; }
 
+  .zone-board-wrap{ overflow-x:auto; padding-bottom:4px; }
+  .zone-board{ display:grid; grid-template-columns: repeat(5, 132px); grid-template-rows: auto auto; gap: 22px 10px; padding: 4px 2px 8px; min-width: 700px; }
+  .zone-slot{ display:flex; flex-direction:column; align-items:center; gap:6px; }
+  .zone-slot-label{ font-size:10px; opacity:0.55; letter-spacing:0.05em; text-align:center; }
+  .zone-empty{ width:128px; min-height:76px; border:1.5px dashed var(--line); border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:11px; opacity:0.35; }
+
+  .zone-picker{ display:flex; flex-wrap:wrap; gap:10px; margin:14px 0; }
+  .zone-pick-btn{
+    flex: 1 1 120px; min-width:110px; padding:12px 10px; border-radius:8px; cursor:pointer;
+    border:1.5px solid var(--line); background: rgba(246,241,228,0.06); color: var(--card-face);
+    font-size:13.5px; display:flex; flex-direction:column; gap:4px; align-items:center;
+  }
+  .zone-pick-btn:not(:disabled):hover{ border-color: var(--brass); background: rgba(201,162,39,0.12); }
+  .zone-pick-btn:disabled{ opacity:0.35; cursor:not-allowed; }
+  .zone-pick-sub{ font-size:11px; opacity:0.65; }
+
   .commander-card{ display:inline-flex; flex-direction:column; gap:2px; min-width:180px; background: linear-gradient(135deg, #2a2116, #1c1710); color: var(--card-face); border: 1px solid rgba(201,162,39,0.5); border-radius:8px; padding:10px 12px; cursor:pointer; }
   .commander-card .ctag{ font-size:10px; color:var(--brass); letter-spacing:0.08em; }
   .commander-card .cname{ font-weight:700; font-size:14.5px; }
@@ -163,7 +179,6 @@ const firebaseConfig = {
   storageBucket: "card-table-315ab.firebasestorage.app",
   messagingSenderId: "714968976301",
   appId: "1:714968976301:web:a9e1b1c30ff2fe726aaf24"
-};
 /* ===================================================================== */
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
@@ -243,6 +258,23 @@ function runApp(){
     return COLOR_MAP[key] || "#7a7a7a";
   }
 
+  // 場のゾーン定義。メイン①はサブ①・サブ②に、メイン②はサブ②・サブ③に接続。
+  // 上段(row1)にメイン、下段(row2)にサブを互い違いに配置することでM字型を表現する。
+  const ZONE_DEFS = [
+    { key: "sub1",  label: "サブゾーン①",  row: 2, col: 1 },
+    { key: "main1", label: "メインゾーン①", row: 1, col: 2 },
+    { key: "sub2",  label: "サブゾーン②",  row: 2, col: 3 },
+    { key: "main2", label: "メインゾーン②", row: 1, col: 4 },
+    { key: "sub3",  label: "サブゾーン③",  row: 2, col: 5 }
+  ];
+  const ZONE_KEYS = ZONE_DEFS.map(z => z.key);
+  const ZONE_LABEL = {}; ZONE_DEFS.forEach(z => { ZONE_LABEL[z.key] = z.label; });
+  function emptyField(){ const f = {}; ZONE_KEYS.forEach(k => f[k] = null); return f; }
+  function findFieldZone(field, cardId){
+    for(const k of ZONE_KEYS){ if(field[k] && field[k].id === cardId) return k; }
+    return null;
+  }
+
   // ---------------- Firebase data helpers ----------------
   async function fbGet(path){
     try{
@@ -277,17 +309,20 @@ function runApp(){
 
   // ---------------- room seat storage (realtime) ----------------
   function defaultSeatState(){
-    return { commander:null, deck:[], hand:[], field:[], discard:[], submitted:false, started:false, turnState:"normal", log:[], updatedAt:0 };
+    return { commander:null, deck:[], hand:[], field:emptyField(), discard:[], submitted:false, started:false, turnState:"normal", log:[], updatedAt:0 };
   }
-  // Firebase Realtime Databaseは空配列/未設定の項目をそのまま保存できず、
+  // Firebase Realtime Databaseは空配列/null/未設定の項目をそのまま保存できず、
   // 読み込み時にキーごと消えることがあるため、読み込んだデータは必ずこれで補完する。
   function normalizeSeat(raw){
     if(!raw) return null;
+    const rawField = raw.field || {};
+    const field = emptyField();
+    ZONE_KEYS.forEach(k => { field[k] = rawField[k] || null; });
     return {
       commander: raw.commander || null,
       deck: raw.deck || [],
       hand: raw.hand || [],
-      field: raw.field || [],
+      field: field,
       discard: raw.discard || [],
       submitted: !!raw.submitted,
       started: !!raw.started,
@@ -423,7 +458,9 @@ function runApp(){
 
   // ---------------- room flow ----------------
   async function enterDeckSetup(){
+    if(!roomCode || !mySeat) return; // 退室済みなら何もしない
     deckSetupPresets = await loadPresetIndex();
+    if(!roomCode || !mySeat) return; // 待機中に退室していたら反映しない
     selectedPresetId = null; selectedPresetDetail = null; errorMsg = "";
     screen = "deckSetup"; render();
   }
@@ -492,21 +529,23 @@ function runApp(){
   function openHandCardMenu(cardId){ modal = { type:"handCard", cardId }; render(); }
   function openFieldCardMenu(cardId){ modal = { type:"fieldCard", cardId }; render(); }
   function openCommanderView(seat){ modal = { type:"commander", seat }; render(); }
+  function openChooseZone(cardId){ modal = { type:"chooseZone", cardId }; render(); }
   async function adjustCounter(cardId, delta){
     const s = state[mySeat];
-    const card = s.hand.find(c => c.id === cardId) || s.field.find(c => c.id === cardId) || s.discard.find(c => c.id === cardId);
+    const card = s.hand.find(c => c.id === cardId) || Object.values(s.field).find(c => c && c.id === cardId) || s.discard.find(c => c.id === cardId);
     if(!card) return;
     card.counter = Math.max(0, (card.counter || 0) + delta);
     await saveSeat(mySeat, s); render();
   }
 
-  async function playToField(cardId){
+  async function playToZone(cardId, zoneKey){
     const s = state[mySeat];
+    if(s.field[zoneKey]) return; // そのゾーンは既に埋まっている
     const idx = s.hand.findIndex(c => c.id === cardId);
     if(idx === -1) return;
     const [card] = s.hand.splice(idx, 1);
-    s.field.push(card);
-    addLog(s, `『${card.name}』を場に出した`);
+    s.field[zoneKey] = card;
+    addLog(s, `『${card.name}』を${ZONE_LABEL[zoneKey]}に出した`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -532,9 +571,10 @@ function runApp(){
   }
   async function returnFieldToHand(cardId){
     const s = state[mySeat];
-    const idx = s.field.findIndex(c => c.id === cardId);
-    if(idx === -1) return;
-    const [card] = s.field.splice(idx, 1);
+    const zoneKey = findFieldZone(s.field, cardId);
+    if(!zoneKey) return;
+    const card = s.field[zoneKey];
+    s.field[zoneKey] = null;
     s.hand.push(card);
     addLog(s, `『${card.name}』を場から手札に戻した`);
     modal = null;
@@ -542,9 +582,10 @@ function runApp(){
   }
   async function discardFromField(cardId){
     const s = state[mySeat];
-    const idx = s.field.findIndex(c => c.id === cardId);
-    if(idx === -1) return;
-    const [card] = s.field.splice(idx, 1);
+    const zoneKey = findFieldZone(s.field, cardId);
+    if(!zoneKey) return;
+    const card = s.field[zoneKey];
+    s.field[zoneKey] = null;
     s.discard.push(card);
     addLog(s, `『${card.name}』を場から捨てた`);
     modal = null;
@@ -912,19 +953,48 @@ function runApp(){
     if(!cmd) return `<div class="empty-note">未設定</div>`;
     return `<div class="commander-card" onclick="openCommanderView('${seat}')"><span class="ctag">指揮官</span><span class="cname">${escapeHtml(cmd.name)}</span><span class="caff">${escapeHtml(cmd.affiliation || "")}</span></div>`;
   }
+  function zoneBoardHtml(fieldObj, seat, editable){
+    return `
+      <div class="zone-board-wrap">
+        <div class="zone-board">
+          ${ZONE_DEFS.map(z => {
+            const card = fieldObj[z.key];
+            const inner = card
+              ? cardHtml(card, editable ? "openFieldCardMenu" : "noop", seat, editable)
+              : `<div class="zone-empty">空き</div>`;
+            return `
+              <div class="zone-slot" style="grid-column:${z.col}; grid-row:${z.row};">
+                <div class="zone-slot-label">${z.label}</div>
+                ${inner}
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    `;
+  }
 
   function renderGame(){
     const mySeatKey = mySeat;
-    const oppSeatKey = otherSeat(mySeat);
-    const mine = state[mySeatKey];
-    const opp = state[oppSeatKey];
-    if(!mine){ enterDeckSetup(); return; }
+    const oppSeatKey = mySeat ? otherSeat(mySeat) : null;
+    const mine = mySeatKey ? state[mySeatKey] : null;
+    const opp = oppSeatKey ? state[oppSeatKey] : null;
+    if(!roomCode || !mySeatKey || !mine){
+      app.innerHTML = `
+        <h1 class="title display">卓 -Table-</h1>
+        <div class="panel">
+          <div class="hint">対戦データが見つかりません。相手がゲームを終了したか、通信状況の問題かもしれません。</div>
+          <button class="primary full" id="backHomeBtn" style="margin-top:14px;">ホームに戻る</button>
+        </div>
+      `;
+      const btn = document.getElementById("backHomeBtn");
+      if(btn) btn.onclick = leaveRoom;
+      return;
+    }
 
     const bothStarted = mine.started && opp && opp.started;
     const oppHandBacks = opp ? opp.hand.map(()=>cardBackHtml(oppSeatKey)).join("") : "";
-    const oppFieldCards = opp ? opp.field.map(c => cardHtml(c, "noop", oppSeatKey, false)).join("") : "";
     const myHandCards = mine.hand.map(c => cardHtml(c, "openHandCardMenu", mySeatKey, true)).join("");
-    const myFieldCards = mine.field.map(c => cardHtml(c, "openFieldCardMenu", mySeatKey, true)).join("");
 
     let mergedLog = [];
     if(mine.log) mergedLog = mergedLog.concat(mine.log.map(e => ({...e, who: mySeatKey})));
@@ -954,13 +1024,13 @@ function runApp(){
         </div>
         <div class="zone">
           <div class="zone-label"><span>相手(席${oppSeatKey})の場</span><span class="mono" style="opacity:0.6; cursor:pointer;" id="oppDiscardBtn">捨て札を見る(${opp ? opp.discard.length : 0})</span></div>
-          <div class="cards-row">${oppFieldCards || `<div class="empty-note">なし</div>`}</div>
+          ${opp ? zoneBoardHtml(opp.field, oppSeatKey, false) : `<div class="empty-note">なし</div>`}
         </div>
 
         <div style="text-align:center; margin: 10px 0; opacity:0.4; font-size:12px; letter-spacing:0.1em;">— — —</div>
 
         <div class="zone mine"><div class="zone-label"><span>あなた(席${mySeatKey})の指揮官</span></div><div class="cards-row" style="min-height:auto;">${commanderHtml(mine.commander, mySeatKey)}</div></div>
-        <div class="zone mine"><div class="zone-label"><span>あなた(席${mySeatKey})の場</span></div><div class="cards-row">${myFieldCards || `<div class="empty-note">場にカードはありません</div>`}</div></div>
+        <div class="zone mine"><div class="zone-label"><span>あなた(席${mySeatKey})の場</span></div>${zoneBoardHtml(mine.field, mySeatKey, true)}</div>
         <div class="zone mine"><div class="zone-label"><span>あなた(席${mySeatKey})の手札 — ${mine.hand.length}枚</span></div><div class="cards-row">${myHandCards || `<div class="empty-note">手札はありません</div>`}</div></div>
 
         <div class="zone mine">
@@ -1058,15 +1128,36 @@ function runApp(){
       `);
     }
     if(modal.type === "fieldCard"){
-      const card = mine.field.find(c => c.id === modal.cardId);
+      const zoneKey = findFieldZone(mine.field, modal.cardId);
+      const card = zoneKey ? mine.field[zoneKey] : null;
       if(!card){ modal = null; return ""; }
       return overlayWrap(`
-        <h3 class="display">カード詳細</h3>${cardDetailBlock(card, mySeatKey, true)}
+        <h3 class="display">カード詳細 <span style="font-size:12px; opacity:0.6; font-weight:400;">(${ZONE_LABEL[zoneKey]})</span></h3>${cardDetailBlock(card, mySeatKey, true)}
         <div class="row" style="flex-wrap:wrap; margin-top:14px;">
           <button class="act" id="mReturnHand">手札に戻す</button>
           <button class="act" id="mDiscardField">捨てる</button>
         </div>
         <div style="margin-top:14px;"><button class="ghost" id="modalCancel">キャンセル</button></div>
+      `);
+    }
+    if(modal.type === "chooseZone"){
+      const card = mine.hand.find(c => c.id === modal.cardId);
+      if(!card){ modal = null; return ""; }
+      return overlayWrap(`
+        <h3 class="display">『${escapeHtml(card.name)}』をどこに出しますか？</h3>
+        <div class="hint">各ゾーンには1枚までしか置けません。空いているゾーンから選んでください。</div>
+        <div class="zone-picker">
+          ${ZONE_DEFS.map(z => {
+            const occupied = !!mine.field[z.key];
+            return `
+              <button class="zone-pick-btn" data-zone="${z.key}" ${occupied ? "disabled" : ""}>
+                ${z.label}
+                ${occupied ? `<span class="zone-pick-sub">使用中: ${escapeHtml(mine.field[z.key].name)}</span>` : `<span class="zone-pick-sub">空き</span>`}
+              </button>
+            `;
+          }).join("")}
+        </div>
+        <button class="ghost" id="modalCancel">キャンセル</button>
       `);
     }
     if(modal.type === "commander"){
@@ -1111,11 +1202,14 @@ function runApp(){
   function bindGameModalButtons(){
     const c = id => document.getElementById(id);
     if(!modal) return;
-    if(c("mPlay")) c("mPlay").onclick = () => playToField(modal.cardId);
+    if(c("mPlay")) c("mPlay").onclick = () => openChooseZone(modal.cardId);
     if(c("mDiscard")) c("mDiscard").onclick = () => discardFromHand(modal.cardId);
     if(c("mReturn")) c("mReturn").onclick = () => returnToDeckTop(modal.cardId);
     if(c("mReturnHand")) c("mReturnHand").onclick = () => returnFieldToHand(modal.cardId);
     if(c("mDiscardField")) c("mDiscardField").onclick = () => discardFromField(modal.cardId);
+    document.querySelectorAll("[data-zone]").forEach(el => {
+      el.onclick = () => playToZone(modal.cardId, el.getAttribute("data-zone"));
+    });
   }
 
   window.pickFromSearch = pickFromSearch;
