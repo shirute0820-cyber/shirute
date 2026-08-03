@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>卓 -Table-</title>
+<title>偉人カードゲーム</title>
 <style>
   :root{
     --felt-1: #16241f; --felt-2: #1f342c;
@@ -157,9 +157,9 @@
   .zone-pick-sub{ font-size:11px; opacity:0.65; }
 
   .zone-pick-cell{
-    width:128px; min-height:76px; border-radius:7px; cursor:pointer;
+    width:78px; min-height:54px; border-radius:6px; cursor:pointer;
     border:1.5px dashed var(--line); background: rgba(246,241,228,0.06); color: var(--card-face);
-    font-size:12px; display:flex; align-items:center; justify-content:center; text-align:center; padding:8px;
+    font-size:10.5px; line-height:1.3; display:flex; align-items:center; justify-content:center; text-align:center; padding:4px;
   }
   .zone-pick-cell:not(:disabled):hover{ border-color: var(--brass); border-style:solid; background: rgba(201,162,39,0.14); }
   .zone-pick-cell:disabled{ opacity:0.4; cursor:not-allowed; }
@@ -171,6 +171,8 @@
 
   .card{ width: 128px; min-height: 108px; background: var(--card-face); color: var(--ink); border-radius: 7px; padding: 8px 9px; box-shadow: 0 2px 5px rgba(0,0,0,0.35); cursor:pointer; font-size:11.5px; line-height:1.3; display:flex; flex-direction:column; gap:3px; border: 1px solid rgba(0,0,0,0.08); transition: transform .1s ease; }
   .card:hover{ transform: translateY(-3px); }
+  .card.mulligan-selected{ outline: 3px solid var(--danger); outline-offset:2px; opacity:0.55; cursor:pointer; }
+  .mulligan-tag{ margin-top:4px; font-size:10px; font-weight:700; color: var(--danger); text-align:center; }
   .card .toprow{ display:flex; justify-content:space-between; align-items:center; }
   .card .swatch{ width:9px; height:9px; border-radius:50%; }
   .card .status{ font-weight:700; font-size:12.5px; }
@@ -200,6 +202,10 @@
   .card.back.A{ background: repeating-linear-gradient(45deg, var(--seat-a), var(--seat-a) 6px, #a56e26 6px, #a56e26 12px); }
 
   .deckbox{ display:flex; align-items:center; gap:14px; }
+  .deck-stack{ position:relative; width:64px; height:82px; flex-shrink:0; }
+  .deck-stack .card.back{ position:absolute; top:6px; left:0; }
+  .deck-stack .card.back:nth-child(2){ top:3px; left:4px; }
+  .deck-stack .card.back:nth-child(3){ top:0; left:8px; }
   .deckbox .num{ font-size:26px; font-weight:700; }
   .deckbox .lbl{ font-size:11px; opacity:0.6; }
   .actions{ display:flex; gap:8px; flex-wrap:wrap; }
@@ -255,7 +261,7 @@ const NOT_CONFIGURED = firebaseConfig.apiKey === "YOUR_API_KEY";
 
 if (NOT_CONFIGURED) {
   app.innerHTML = `
-    <h1 class="title display">卓 -Table-</h1>
+    <h1 class="title display">偉人カードゲーム</h1>
     <div class="setup-warning">
       <b>まだセットアップが完了していません。</b><br><br>
       このファイルの先頭付近にある <code>firebaseConfig</code> を、あなた自身の Firebase プロジェクトの設定値に書き換えてから、もう一度このページを開いてください。<br><br>
@@ -278,7 +284,7 @@ function runApp(){
   let state = { A: null, B: null };
   let connStatus = { A: false, B: false };
   let unsubA = null, unsubB = null, unsubShared = null, unsubDecks = null;
-  let sharedState = { turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false };
+  let sharedState = { turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false, dealt: false, firstPlayer: null };
   let gameInitInProgress = false;
   let dragData = null;
   let modal = null;
@@ -303,6 +309,7 @@ function runApp(){
     return {
       deckName: "",
       commander: { affiliation:"", name:"", effect:"" },
+      stackLabel: "",
       cards: [],
       formCard: { color:"", name:"", affiliation:"", status:"", seinenba:"", effect1:"", effect2:"", counterLabel:"", qty:"1" },
       bulkText: ""
@@ -411,7 +418,7 @@ function runApp(){
 
   // ---------------- room seat storage (realtime) ----------------
   function defaultSeatState(){
-    return { commander:null, deck:[], hand:[], field:emptyField(), discard:[], exclude:[], revealSlot:null, submitted:false, started:false, hp:3, log:[], updatedAt:0 };
+    return { commander:null, deck:[], hand:[], field:emptyField(), discard:[], exclude:[], revealSlot:null, submitted:false, started:false, hp:3, stack:0, stackLabel:"", mulliganDone:false, log:[], updatedAt:0 };
   }
   // Firebase Realtime Databaseは空配列/null/未設定の項目をそのまま保存できず、
   // 読み込み時にキーごと消えることがあるため、読み込んだデータは必ずこれで補完する。
@@ -431,6 +438,9 @@ function runApp(){
       submitted: !!raw.submitted,
       started: !!raw.started,
       hp: typeof raw.hp === "number" ? raw.hp : 3,
+      stack: typeof raw.stack === "number" ? raw.stack : 0,
+      stackLabel: raw.stackLabel || "",
+      mulliganDone: !!raw.mulliganDone,
       log: raw.log || [],
       updatedAt: raw.updatedAt || 0
     };
@@ -440,7 +450,9 @@ function runApp(){
       turnState: (raw && raw.turnState) || "normal",
       currentTurn: (raw && raw.currentTurn) || null,
       turnNumber: (raw && typeof raw.turnNumber === "number") ? raw.turnNumber : 0,
-      gameInitialized: !!(raw && raw.gameInitialized)
+      gameInitialized: !!(raw && raw.gameInitialized),
+      dealt: !!(raw && raw.dealt),
+      firstPlayer: (raw && raw.firstPlayer) || null
     };
   }
   async function saveSeat(seat, obj){
@@ -596,7 +608,7 @@ function runApp(){
     if(id){
       const p = await loadPresetById(id);
       if(p){
-        draft = { deckName: p.name, commander: {...p.commander}, cards: (p.cards||[]).map(c => ({...c})), formCard: freshDraft().formCard, bulkText: "" };
+        draft = { deckName: p.name, commander: {...p.commander}, stackLabel: p.stackLabel || "", cards: (p.cards||[]).map(c => ({...c})), formCard: freshDraft().formCard, bulkText: "" };
         editingPresetId = id;
       }
     } else {
@@ -618,6 +630,7 @@ function runApp(){
     const obj = {
       name: draft.deckName.trim(),
       commander: { affiliation: draft.commander.affiliation.trim(), name: draft.commander.name.trim(), effect: draft.commander.effect.trim() },
+      stackLabel: draft.stackLabel.trim(),
       cards: draft.cards, updatedAt: Date.now()
     };
     await savePresetById(id, obj);
@@ -656,6 +669,8 @@ function runApp(){
     const s = defaultSeatState();
     s.commander = { affiliation: preset.commander.affiliation, name: preset.commander.name, effect: preset.commander.effect };
     s.deck = preset.cards.map(c => ({ ...c, id: uid(), counter: 0 }));
+    s.stackLabel = preset.stackLabel || "";
+    s.stack = 0;
     s.submitted = true;
     addLog(s, `デッキ『${preset.name}』を登録した(本隊${s.deck.length}枚 + 指揮官)`);
     await saveSeat(mySeat, s);
@@ -667,6 +682,7 @@ function runApp(){
     const s = state[mySeat];
     s.deck = shuffle(s.deck);
     s.started = true;
+    mulliganSelected = [];
     addLog(s, "デッキをシャッフルしてゲームを開始した");
     await saveSeat(mySeat, s);
     screen = "game"; render();
@@ -723,6 +739,12 @@ function runApp(){
     addLog(s, `体力を${delta > 0 ? "回復" : "減少"}した(現在${s.hp})`);
     await saveSeat(mySeat, s); render();
   }
+  async function adjustStack(delta){
+    const s = state[mySeat];
+    s.stack = Math.max(0, (typeof s.stack === "number" ? s.stack : 0) + delta);
+    addLog(s, `「${s.stackLabel || 'スタック'}」を${delta > 0 ? "+1" : "-1"}した(現在${s.stack})`);
+    await saveSeat(mySeat, s); render();
+  }
 
   async function playToZone(cardId, zoneKey){
     const s = state[mySeat];
@@ -731,7 +753,7 @@ function runApp(){
     if(idx === -1) return;
     const [card] = s.hand.splice(idx, 1);
     s.field[zoneKey] = card;
-    addLog(s, `『${card.name}』を${ZONE_LABEL[zoneKey]}に出した`);
+    addLog(s, `『${card.name}』を${ZONE_LABEL[zoneKey]}に通常招来した`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -858,7 +880,7 @@ function runApp(){
     if(idx === -1) return;
     const [card] = s.discard.splice(idx, 1);
     s.field[zoneKey] = card;
-    addLog(s, `墓地から『${card.name}』を${ZONE_LABEL[zoneKey]}に出した`);
+    addLog(s, `墓地から『${card.name}』を${ZONE_LABEL[zoneKey]}に緊急招来した`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -946,7 +968,7 @@ function runApp(){
     if(idx === -1) return;
     const [card] = s.exclude.splice(idx, 1);
     s.field[zoneKey] = card;
-    addLog(s, `除外から『${card.name}』を${ZONE_LABEL[zoneKey]}に出した`);
+    addLog(s, `除外から『${card.name}』を${ZONE_LABEL[zoneKey]}に緊急招来した`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -960,11 +982,12 @@ function runApp(){
 
   // ゲーム開始時の初期化(先攻/後攻決定・初期手札6枚ドロー・最初のターン設定)
   // 席Aのクライアントのみが実行することで、二重実行による重複ドローを防ぐ。
-  async function maybeInitializeGame(){
+  // 第1段階: 初期手札6枚を配る(まだターンは始めない。マリガン待ち状態にする)
+  async function maybeDealInitialHands(){
     if(mySeat !== "A" || gameInitInProgress) return;
     const a = state.A, b = state.B;
     if(!a || !b || !a.started || !b.started) return;
-    if(sharedState.gameInitialized) return;
+    if(sharedState.dealt) return;
     gameInitInProgress = true;
     try{
       const first = Math.random() < 0.5 ? "A" : "B";
@@ -976,14 +999,81 @@ function runApp(){
       for(let i=0;i<6;i++){ if(bCopy.deck.length) bCopy.hand.push(bCopy.deck.shift()); }
       addLog(bCopy, "初期手札6枚をドローした");
       await saveSeat("B", bCopy);
-      const hit = Math.floor(Math.random()*3) === 0;
-      await saveShared({ turnState: hit ? "seinenba" : "normal", currentTurn: first, turnNumber: 1, gameInitialized: true });
+      await saveShared({ turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false, dealt: true, firstPlayer: first });
       state.A = aCopy; state.B = bCopy;
       render();
     } finally {
       gameInitInProgress = false;
     }
   }
+  // 第2段階: 両者のマリガンが完了したら、正念場を抽選してターンを開始する
+  async function maybeStartTurnsAfterMulligan(){
+    if(mySeat !== "A" || gameInitInProgress) return;
+    const a = state.A, b = state.B;
+    if(!a || !b || !sharedState.dealt || sharedState.gameInitialized) return;
+    if(!a.mulliganDone || !b.mulliganDone) return;
+    gameInitInProgress = true;
+    try{
+      const hit = Math.floor(Math.random()*3) === 0;
+      await saveShared({ turnState: hit ? "seinenba" : "normal", currentTurn: sharedState.firstPlayer || "A", turnNumber: 1, gameInitialized: true, dealt: true, firstPlayer: sharedState.firstPlayer || "A" });
+      render();
+    } finally {
+      gameInitInProgress = false;
+    }
+  }
+
+  let mulliganSelected = [];
+  function toggleMulliganCard(cardId){
+    const idx = mulliganSelected.indexOf(cardId);
+    if(idx >= 0){ mulliganSelected.splice(idx, 1); }
+    else { if(mulliganSelected.length >= 3) return; mulliganSelected.push(cardId); }
+    render();
+  }
+  async function confirmMulligan(doMulligan){
+    const s = state[mySeat];
+    if(doMulligan && mulliganSelected.length > 0){
+      const returning = s.hand.filter(c => mulliganSelected.indexOf(c.id) !== -1);
+      s.hand = s.hand.filter(c => mulliganSelected.indexOf(c.id) === -1);
+      s.deck = shuffle([...s.deck, ...returning]);
+      for(let i=0;i<returning.length;i++){ if(s.deck.length) s.hand.push(s.deck.shift()); }
+      addLog(s, `マリガンで${returning.length}枚を交換した`);
+    } else {
+      addLog(s, "マリガンせずそのまま始めた");
+    }
+    s.mulliganDone = true;
+    mulliganSelected = [];
+    await saveSeat(mySeat, s);
+    state[mySeat] = s;
+    await maybeStartTurnsAfterMulligan();
+    render();
+  }
+  function mulliganOverlayHtml(mine){
+    const cardsHtml = mine.hand.map(c => {
+      const selected = mulliganSelected.indexOf(c.id) !== -1;
+      return `
+        <div class="card${selected ? ' mulligan-selected' : ''}" onclick="toggleMulliganCard('${c.id}')">
+          <div class="toprow"><span class="swatch" style="background:${colorSwatch(c.color)};"></span>${statusHtml(c)}</div>
+          <div class="cname">${escapeHtml(c.name)}</div>
+          <div class="caff">${escapeHtml(c.affiliation || "")}</div>
+          ${selected ? `<div class="mulligan-tag">戻す</div>` : ""}
+        </div>
+      `;
+    }).join("");
+    return `
+      <div class="waiting-overlay" style="z-index:55;">
+        <div class="box" style="max-width:620px; width:100%;">
+          <h2 class="display" style="margin:0 0 6px;">マリガン</h2>
+          <div class="hint" style="margin-bottom:14px;">山札に戻したいカードを選んでください(最大3枚)。選んだ枚数分、新しく引き直します。選択中: ${mulliganSelected.length}/3</div>
+          <div class="modal-cards" style="justify-content:center;">${cardsHtml}</div>
+          <div class="row" style="justify-content:center; flex-wrap:wrap; gap:10px; margin-top:16px;">
+            <button class="ghost" id="mulliganSkipBtn">マリガンしない</button>
+            <button class="primary" id="mulliganConfirmBtn" ${mulliganSelected.length===0?"disabled":""}>選んだカードを戻して引き直す</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  window.toggleMulliganCard = toggleMulliganCard;
 
   async function endTurn(){
     if(sharedState.currentTurn !== mySeat) return;
@@ -1011,7 +1101,8 @@ function runApp(){
 
   async function playAgain(){
     modal = null;
-    await saveShared({ turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false });
+    mulliganSelected = [];
+    await saveShared({ turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false, dealt: false, firstPlayer: null });
     await saveSeat("A", defaultSeatState());
     await saveSeat("B", defaultSeatState());
     await enterDeckSetup();
@@ -1113,13 +1204,18 @@ function runApp(){
               <li>自陣の偉人1枚を除外する</li>
             </ul>
           </li>
-          <li>自分の体力が1になったとき、指揮官能力を発動することができる。</li>
+          <li>自分の体力が1になったとき、指揮官効果のうち「戦術指揮」を発動することができる(他の指揮官効果はこの条件に含まれない)。</li>
+        </ul>
+
+        <h3 class="display">対戦開始時</h3>
+        <ul class="rules-list">
+          <li>お互いに初期手札6枚をドローした後、それぞれ最大3枚まで好きなカードを山札に戻して引き直せる(マリガン)。戻す・戻さないは各プレイヤーが自由に選べる。</li>
         </ul>
 
         <h3 class="display">ターン開始からの流れ</h3>
         <ul class="rules-list">
           <li><b>ドローフェーズ</b>:自動で行われる。そのターンが平場か正念場か決定される。正念場の場合、決死値に応じて偉人のステータスが増減する。</li>
-          <li><b>移動・招来フェーズ</b>:偉人を招来する前であればサブゾーンから接続されたメインゾーンに移動できる。移動と招来は1ターン合計2回まで。</li>
+          <li><b>移動・招来フェーズ</b>:偉人を招来する前であればサブゾーンから接続されたメインゾーンに移動できる。移動と招来(通常招来・緊急招来を合わせて)は1ターン合計2回まで。メインゾーンへの通常招来は1ターン1回まで。</li>
           <li><b>戦闘フェーズ</b>:相手メインゾーンに存在する偉人を攻撃できる。相手メインゾーンに偉人が存在しない場合、相手に直接攻撃できる。</li>
           <li><b>エンドフェーズ</b>:ターン終了を押すと相手にターンが移動する。</li>
         </ul>
@@ -1129,6 +1225,9 @@ function runApp(){
           <li>スピードスターターを持っていない偉人は、招来したターンは攻撃できない。</li>
           <li>サブゾーンからメインゾーンに移動することはできない。</li>
           <li>サブゾーンに偉人がいる場合、そのサブゾーンが接続しているメインゾーンには偉人を招来することはできない。</li>
+          <li><b>招来</b>:偉人を場に出す行為の総称。「通常招来」と「緊急招来」の2種類がある。</li>
+          <li><b>通常招来</b>:手札から偉人を場に出すこと。</li>
+          <li><b>緊急招来</b>:カードの効果によって偉人を場に出すこと。</li>
           <li><b>カバーブロッカー</b>:サポート先の偉人が攻撃されたとき、代わりに攻撃を受けることができる。</li>
           <li><b>決死値</b>:正念場になった際増減するステータスの値。</li>
         </ul>
@@ -1142,7 +1241,7 @@ function runApp(){
 
   function renderHome(){
     app.innerHTML = `
-      <h1 class="title display">卓 -Table-</h1>
+      <h1 class="title display">偉人カードゲーム</h1>
       <p class="sub">自作カードゲーム専用・2人用オンライン対戦テーブル</p>
       <div class="panel">
         <div class="field-row">
@@ -1207,20 +1306,32 @@ function runApp(){
     let detailHtml = "";
     if(selectedPreviewId && selectedPreviewDetail){
       const d = selectedPreviewDetail;
+      const groups = [];
+      const groupMap = {};
+      d.cards.forEach(card => {
+        const sig = cardSignature(card);
+        if(!groupMap[sig]){ groupMap[sig] = { sample: card, count: 0 }; groups.push(groupMap[sig]); }
+        groupMap[sig].count++;
+      });
+      groups.sort((a, b) => {
+        if(a.count !== b.count) return a.count - b.count; // 枚数が少ないカードを先に
+        return b.sample.status - a.sample.status; // 同数ならステータスが高い順
+      });
       detailHtml = `
         <div class="preview-box">
           <div style="font-weight:700; margin-bottom:6px;">指揮官: ${escapeHtml(d.commander.name)} <span style="opacity:0.6; font-weight:400;">(${escapeHtml(d.commander.affiliation||"—")})</span></div>
           ${d.commander.effect ? `<div class="hint" style="margin-bottom:10px;">${escapeHtml(d.commander.effect)}</div>` : ""}
-          <div style="font-size:12px; opacity:0.6; margin-bottom:4px;">デッキ内容(${d.cards.length}枚)</div>
-          ${d.cards.map(c => `
+          <div style="font-size:12px; opacity:0.6; margin-bottom:4px;">デッキ内容(${d.cards.length}枚 / ${groups.length}種)</div>
+          ${groups.map(g => { const c = g.sample; return `
             <div class="preview-cardline">
               <span class="swatch" style="background:${colorSwatch(c.color)};"></span>
               <span style="flex:1;">${escapeHtml(c.name)} <span style="opacity:0.5;">/ ${escapeHtml(c.affiliation||"—")}</span>${c.counterLabel ? ` <span style="opacity:0.5;">/「${escapeHtml(c.counterLabel)}」カウンター</span>` : ""}</span>
               <span class="mono" style="opacity:0.7;">${c.status}(${fmtMod(c.seinenba)})</span>
+              <span class="mono" style="opacity:0.85; font-weight:700;">×${g.count}</span>
             </div>
             ${c.effect1 ? `<div class="hint" style="margin:2px 0 2px 17px;">①${escapeHtml(c.effect1)}</div>` : ""}
             ${c.effect2 ? `<div class="hint" style="margin:2px 0 6px 17px;">②${escapeHtml(c.effect2)}</div>` : ""}
-          `).join("")}
+          `; }).join("")}
         </div>
       `;
     }
@@ -1315,6 +1426,12 @@ function runApp(){
         </div>
         <div class="field-row"><label class="small-label">効果</label><textarea id="cmdEffect" style="min-height:70px;" placeholder="指揮官の効果テキスト">${escapeHtml(c.effect)}</textarea></div>
 
+        <h3 class="display" style="margin-top:22px;">デッキ全体スタック(任意)</h3>
+        <div class="field-row">
+          <label class="small-label">スタック名(例: 海。カードごとではなく、このデッキ・プレイヤー全体で共有する数値です)</label>
+          <input type="text" id="stackLabelInput" value="${escapeHtml(draft.stackLabel)}" placeholder="このデッキでスタックを使わないなら空欄でOK">
+        </div>
+
         <div style="border-top:1px solid var(--line); margin:22px 0 18px;"></div>
         <div class="row between" style="margin-bottom:12px;"><h3 class="display" style="margin:0;">② デッキ(目安20枚) <span class="count-badge">現在 ${draft.cards.length}枚</span></h3></div>
 
@@ -1362,6 +1479,7 @@ function runApp(){
 
     bindFormInputs([["cmdAff","affiliation"],["cmdName","name"],["cmdEffect","effect"]], draft.commander);
     document.getElementById("deckNameInput").oninput = (e) => { draft.deckName = e.target.value; };
+    document.getElementById("stackLabelInput").oninput = (e) => { draft.stackLabel = e.target.value; };
     document.getElementById("backBtn").onclick = backFromPresetEditor;
     document.getElementById("saveBtn").onclick = savePresetDraft;
     document.getElementById("tabForm").onclick = switchToForm;
@@ -1458,7 +1576,7 @@ function runApp(){
   function renderSpectate(){
     if(!roomCode){
       app.innerHTML = `
-        <h1 class="title display">卓 -Table-</h1>
+        <h1 class="title display">偉人カードゲーム</h1>
         <div class="panel"><div class="hint">部屋情報が見つかりません。</div>
         <button class="primary full" id="backHomeBtn" style="margin-top:14px;">ホームに戻る</button></div>
       `;
@@ -1468,23 +1586,25 @@ function runApp(){
     }
     const a = state.A, b = state.B;
 
-    function sideHtml(seatData, seatLabel){
+    function sideHtml(seatData, seatLabel, reversed){
       if(!seatData){
         return `<div class="zone"><div class="zone-label"><span>席${seatLabel}</span></div><div class="empty-note">まだ準備中です</div></div>`;
       }
       const handCards = seatData.hand.map(c => cardHtml(c, "noop", seatLabel, false)).join("");
-      return `
+      const infoBlock = `
         <div class="zone">
           <div class="zone-label"><span>席${seatLabel}</span></div>
           <div class="info-row">
             <div class="info-col">${commanderHtml(seatData.commander, seatLabel)}</div>
-            <div class="info-col">${hpHtml(seatData, false)}</div>
+            <div class="info-col">${hpHtml(seatData, false)}${stackHtml(seatData, false)}</div>
             <div class="info-col">
               <div class="zone-slot-label" style="text-align:left; margin-bottom:6px;">手札 ${seatData.hand.length}枚</div>
               <div class="cards-row">${handCards || `<div class="empty-note">なし</div>`}</div>
             </div>
           </div>
         </div>
+      `;
+      const fieldBlock = `
         <div class="zone">
           <div class="zone-label">
             <span>席${seatLabel}の場</span>
@@ -1496,6 +1616,7 @@ function runApp(){
           ${zoneBoardHtml(seatData.field, seatLabel, false, seatData.revealSlot)}
         </div>
       `;
+      return reversed ? (fieldBlock + infoBlock) : (infoBlock + fieldBlock);
     }
 
     let mergedLog = [];
@@ -1523,9 +1644,9 @@ function runApp(){
             <span class="hint" style="margin:0;">正念場: <b style="color:${sharedState.turnState==='seinenba'?'var(--danger)':'inherit'};">${sharedState.turnState==='seinenba' ? "発生中" : "通常"}</b></span>
           </div>
         ` : ""}
-        ${sideHtml(a, "A")}
+        ${sideHtml(a, "A", false)}
         <div style="text-align:center; margin: 10px 0; opacity:0.4; font-size:12px; letter-spacing:0.1em;">— — —</div>
-        ${sideHtml(b, "B")}
+        ${sideHtml(b, "B", true)}
         <div class="log-panel">${logHtml}</div>
       </div>
       ${modalHtmlSpectate()}
@@ -1638,7 +1759,21 @@ function runApp(){
           <button class="act" style="padding:2px 9px;" onclick="adjustHp(-1)">−</button>
           <button class="act" style="padding:2px 9px;" onclick="adjustHp(1)">＋</button>
         ` : ""}
-        ${hp === 1 ? `<span class="hp-commander-note">指揮官 使用可能</span>` : ""}
+        ${hp === 1 ? `<span class="hp-commander-note">「戦術指揮」使用可能</span>` : ""}
+      </div>
+    `;
+  }
+  function stackHtml(seatObj, editable){
+    if(!seatObj.stackLabel) return "";
+    const val = typeof seatObj.stack === "number" ? seatObj.stack : 0;
+    return `
+      <div class="hp-box">
+        <span class="hp-label">${escapeHtml(seatObj.stackLabel)}</span>
+        <span class="mono">${val}</span>
+        ${editable ? `
+          <button class="act" style="padding:2px 9px;" onclick="adjustStack(-1)">−</button>
+          <button class="act" style="padding:2px 9px;" onclick="adjustStack(1)">＋</button>
+        ` : ""}
       </div>
     `;
   }
@@ -1659,9 +1794,12 @@ function runApp(){
   }
   const BOARD_COL_W = 132, BOARD_GAP = 10, BOARD_STEP = BOARD_COL_W + BOARD_GAP;
   function colCenterPx(colIndex){ return (colIndex - 1) * BOARD_STEP + BOARD_COL_W / 2; }
-  function connectorsHtmlBuild(){
+  function connectorsHtmlBuild(colW, gap){
+    colW = colW || BOARD_COL_W; gap = gap == null ? BOARD_GAP : gap;
+    const step = colW + gap;
+    const centerPx = (colIndex) => (colIndex - 1) * step + colW / 2;
     return ZONE_CONNECTORS.map(c => {
-      const xA = colCenterPx(c.fromCol), xB = colCenterPx(c.toCol);
+      const xA = centerPx(c.fromCol), xB = centerPx(c.toCol);
       const left = Math.min(xA, xB), width = Math.abs(xB - xA);
       return `
         <svg class="zone-connector-line" style="left:${left}px; width:${width}px;" viewBox="0 0 100 100" preserveAspectRatio="none">
@@ -1671,10 +1809,11 @@ function runApp(){
     }).join("");
   }
   function zonePickerGridHtml(mine, currentZone){
+    const colW = 78, gap = 8;
     return `
       <div class="zone-board-wrap">
-        <div class="zone-board">
-          <div class="zone-connectors" style="grid-column:1 / -1; grid-row:2;">${connectorsHtmlBuild()}</div>
+        <div class="zone-board picker" style="grid-template-columns: repeat(5, ${colW}px); gap: 4px ${gap}px; min-width: ${colW*5 + gap*4}px;">
+          <div class="zone-connectors" style="grid-column:1 / -1; grid-row:2;">${connectorsHtmlBuild(colW, gap)}</div>
           ${ZONE_DEFS.map(z => {
             const isCurrent = z.key === currentZone;
             const occupied = !!mine.field[z.key] && !isCurrent;
@@ -1738,7 +1877,7 @@ function runApp(){
     const opp = oppSeatKey ? state[oppSeatKey] : null;
     if(!roomCode || !mySeatKey || !mine){
       app.innerHTML = `
-        <h1 class="title display">卓 -Table-</h1>
+        <h1 class="title display">偉人カードゲーム</h1>
         <div class="panel">
           <div class="hint">対戦データが見つかりません。相手がゲームを終了したか、通信状況の問題かもしれません。</div>
           <button class="primary full" id="backHomeBtn" style="margin-top:14px;">ホームに戻る</button>
@@ -1750,11 +1889,13 @@ function runApp(){
     }
 
     const bothStarted = mine.started && opp && opp.started;
-    if(bothStarted && !sharedState.gameInitialized){ maybeInitializeGame(); }
+    if(bothStarted && !sharedState.dealt){ maybeDealInitialHands(); }
+    if(bothStarted && sharedState.dealt && !sharedState.gameInitialized){ maybeStartTurnsAfterMulligan(); }
     const oppHandBacks = opp ? opp.hand.map(()=>cardBackHtml(oppSeatKey)).join("") : "";
     const myHandCards = mine.hand.map(c => cardHtml(c, "openHandCardMenu", mySeatKey, true, "hand", true)).join("");
     const isMyTurn = sharedState.currentTurn === mySeatKey;
-    const gameOver = bothStarted && (mine.hp <= 0 || opp.hp <= 0);
+    const gameOver = bothStarted && sharedState.gameInitialized && (mine.hp <= 0 || opp.hp <= 0);
+    const mulliganPhase = bothStarted && sharedState.dealt && !sharedState.gameInitialized;
 
     let mergedLog = [];
     if(mine.log) mergedLog = mergedLog.concat(mine.log.map(e => ({...e, who: mySeatKey})));
@@ -1787,7 +1928,7 @@ function runApp(){
           <div class="zone-label"><span>相手(席${oppSeatKey})</span></div>
           <div class="info-row">
             <div class="info-col">${bothStarted ? commanderHtml(opp.commander, oppSeatKey) : `<div class="empty-note">対戦開始後に表示</div>`}</div>
-            <div class="info-col">${hpHtml(opp, false)}</div>
+            <div class="info-col">${hpHtml(opp, false)}${stackHtml(opp, false)}</div>
             <div class="info-col">
               <div class="zone-slot-label" style="text-align:left; margin-bottom:6px;">手札 ${opp ? opp.hand.length : 0}枚</div>
               <div class="cards-row" style="min-height:auto;">${oppHandBacks || `<div class="empty-note">なし</div>`}</div>
@@ -1815,7 +1956,7 @@ function runApp(){
           <div class="zone-label"><span>あなた(席${mySeatKey})</span></div>
           <div class="info-row">
             <div class="info-col">${commanderHtml(mine.commander, mySeatKey)}</div>
-            <div class="info-col">${hpHtml(mine, true)}</div>
+            <div class="info-col">${hpHtml(mine, true)}${stackHtml(mine, true)}</div>
           </div>
         </div>
 
@@ -1823,7 +1964,10 @@ function runApp(){
 
         <div class="zone mine">
           <div class="row between" style="flex-wrap:wrap; gap:14px; margin-bottom:12px;">
-            <div class="deckbox"><div><div class="num mono">${mine.deck.length}</div><div class="lbl">山札</div></div></div>
+            <div class="deckbox">
+              <div class="deck-stack">${mine.deck.length > 0 ? [0,1,2].slice(0, Math.min(3, mine.deck.length)).map(() => cardBackHtml(mySeatKey)).join("") : ""}</div>
+              <div><div class="num mono">${mine.deck.length}</div><div class="lbl">山札</div></div>
+            </div>
             <div class="actions">
               <button class="act" id="drawBtn" ${mine.deck.length===0?"disabled":""}>ドロー</button>
               <button class="act" id="searchBtn" ${mine.deck.length===0?"disabled":""}>サーチ</button>
@@ -1844,6 +1988,8 @@ function runApp(){
         <div class="log-panel">${logHtml}</div>
       </div>
       ${!bothStarted ? `<div class="waiting-overlay"><div class="box"><div style="margin-bottom:8px;">相手(席${oppSeatKey})の準備を待っています…</div><div class="hint">相手がゲーム開始ボタンを押すと自動で対戦が始まります。</div></div></div>` : ""}
+      ${mulliganPhase && !mine.mulliganDone ? mulliganOverlayHtml(mine) : ""}
+      ${mulliganPhase && mine.mulliganDone ? `<div class="waiting-overlay"><div class="box"><div style="margin-bottom:8px;">相手(席${oppSeatKey})のマリガンを待っています…</div><div class="hint">相手が選び終えると自動でゲームが始まります。</div></div></div>` : ""}
       ${gameOver ? gameOverOverlayHtml(mine, opp) : ""}
       ${modalHtml(mine, opp, mySeatKey, oppSeatKey)}
     `;
@@ -1851,6 +1997,10 @@ function runApp(){
     document.getElementById("leaveBtn").onclick = leaveRoom;
     document.getElementById("endGameBtn").onclick = confirmEndGame;
     document.getElementById("rulesBtn3").onclick = () => openRules("game");
+    const mulliganSkipBtn = document.getElementById("mulliganSkipBtn");
+    if(mulliganSkipBtn) mulliganSkipBtn.onclick = () => confirmMulligan(false);
+    const mulliganConfirmBtn = document.getElementById("mulliganConfirmBtn");
+    if(mulliganConfirmBtn) mulliganConfirmBtn.onclick = () => confirmMulligan(true);
     document.getElementById("drawBtn").onclick = drawCard;
     document.getElementById("searchBtn").onclick = openSearch;
     document.getElementById("shuffleBtn").onclick = manualShuffle;
@@ -1872,6 +2022,7 @@ function runApp(){
     window.openCommanderView = openCommanderView;
     window.adjustCounter = adjustCounter;
     window.adjustHp = adjustHp;
+    window.adjustStack = adjustStack;
     window.noop = function(){};
   }
 
@@ -1920,7 +2071,7 @@ function runApp(){
       return overlayWrap(`
         <h3 class="display">カード詳細</h3>${cardDetailBlock(card, mySeatKey, true)}
         <div class="row" style="flex-wrap:wrap; margin-top:14px;">
-          <button class="act" id="mPlay">場に出す</button>
+          <button class="act" id="mPlay">通常招来する</button>
           <button class="act" id="mDiscard">墓地に送る</button>
           <button class="act" id="mReturn">山札の一番上に戻す</button>
           <button class="act" id="mReveal">相手に見せる(公開)</button>
@@ -1952,7 +2103,7 @@ function runApp(){
         : mine.exclude.find(c => c.id === modal.cardId);
       if(!card){ modal = null; return ""; }
       const currentZone = source === "field" ? findFieldZone(mine.field, modal.cardId) : null;
-      const titleVerb = source === "field" ? "どこに移動しますか？" : "どこに出しますか？";
+      const titleVerb = source === "field" ? "どこに移動しますか？" : source === "hand" ? "どこに通常招来しますか？" : "どこに緊急招来しますか？";
       return overlayWrap(`
         <h3 class="display">『${escapeHtml(card.name)}』を${titleVerb}</h3>
         <div class="hint">各ゾーンには1枚までしか置けません。空いているゾーンから選んでください。</div>
@@ -1990,7 +2141,7 @@ function runApp(){
         <div class="row" style="flex-wrap:wrap; margin-top:14px;">
           <button class="act" id="mDiscardToHand">手札に加える</button>
           <button class="act" id="mDiscardToDeck">山札に戻す</button>
-          <button class="act" id="mDiscardToField">場に出す</button>
+          <button class="act" id="mDiscardToField">緊急招来する</button>
           <button class="act" id="mDiscardToExclude" style="color:#e2a08a;">除外する</button>
         </div>
         <div style="margin-top:14px;" class="row">
@@ -2028,7 +2179,7 @@ function runApp(){
         <div class="row" style="flex-wrap:wrap; margin-top:14px;">
           <button class="act" id="mExcludeToHand">手札に戻す</button>
           <button class="act" id="mExcludeToDeck">山札に戻す</button>
-          <button class="act" id="mExcludeToField">場に出す</button>
+          <button class="act" id="mExcludeToField">緊急招来する</button>
           <button class="act" id="mExcludeToDiscard">墓地に戻す</button>
         </div>
         <div style="margin-top:14px;" class="row">
@@ -2096,6 +2247,7 @@ function runApp(){
   window.openCommanderView = openCommanderView;
   window.adjustCounter = adjustCounter;
   window.adjustHp = adjustHp;
+  window.adjustStack = adjustStack;
   window.noop = function(){};
 
   render();
