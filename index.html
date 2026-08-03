@@ -276,6 +276,23 @@ function runApp(){
   function defaultSeatState(){
     return { commander:null, deck:[], hand:[], field:[], discard:[], submitted:false, started:false, turnState:"normal", log:[], updatedAt:0 };
   }
+  // Firebase Realtime Databaseは空配列/未設定の項目をそのまま保存できず、
+  // 読み込み時にキーごと消えることがあるため、読み込んだデータは必ずこれで補完する。
+  function normalizeSeat(raw){
+    if(!raw) return null;
+    return {
+      commander: raw.commander || null,
+      deck: raw.deck || [],
+      hand: raw.hand || [],
+      field: raw.field || [],
+      discard: raw.discard || [],
+      submitted: !!raw.submitted,
+      started: !!raw.started,
+      turnState: raw.turnState || "normal",
+      log: raw.log || [],
+      updatedAt: raw.updatedAt || 0
+    };
+  }
   async function saveSeat(seat, obj){
     obj.updatedAt = Date.now();
     await fbSet(`rooms/${roomCode}/${seat}`, obj);
@@ -283,12 +300,12 @@ function runApp(){
   function attachRoomListeners(){
     detachRoomListeners();
     unsubA = onValue(ref(db, `rooms/${roomCode}/A`), (snap) => {
-      state.A = snap.exists() ? snap.val() : null;
+      state.A = normalizeSeat(snap.exists() ? snap.val() : null);
       connStatus.A = true;
       render();
     }, (err) => { console.error(err); connStatus.A = false; render(); });
     unsubB = onValue(ref(db, `rooms/${roomCode}/B`), (snap) => {
-      state.B = snap.exists() ? snap.val() : null;
+      state.B = normalizeSeat(snap.exists() ? snap.val() : null);
       connStatus.B = true;
       render();
     }, (err) => { console.error(err); connStatus.B = false; render(); });
@@ -545,7 +562,7 @@ function runApp(){
     if(!code){ errorMsg = "部屋番号は半角英数字で入力してください。"; render(); return; }
     roomCode = code; mySeat = selectedSeatChoice;
     attachRoomListeners();
-    const mine = await fbGet(`rooms/${roomCode}/${mySeat}`);
+    const mine = normalizeSeat(await fbGet(`rooms/${roomCode}/${mySeat}`));
     state[mySeat] = mine;
     if(mine && mine.started){ screen = "game"; errorMsg=""; render(); }
     else if(mine && mine.submitted){ screen = "waiting"; errorMsg=""; render(); }
