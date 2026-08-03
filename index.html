@@ -68,6 +68,9 @@
   .full{ width:100%; }
   .row{ display:flex; gap:10px; } .between{ justify-content:space-between; align-items:center; }
   .hint{ font-size:12.5px; opacity:0.6; line-height:1.6; margin-top:8px; }
+  .rules-list{ margin:0 0 18px; padding-left:20px; font-size:13.5px; line-height:1.8; }
+  .rules-list li{ margin-bottom:6px; }
+  .rules-list .rules-list{ margin:6px 0 0; font-size:13px; opacity:0.85; }
   .tabbar{ display:flex; gap:6px; margin-bottom:16px; }
   .tabbtn{ flex:1; text-align:center; padding:9px; border-radius:6px; cursor:pointer; font-size:13px; border:1px solid var(--line); opacity:0.6; }
   .tabbtn.active{ opacity:1; background: rgba(201,162,39,0.14); border-color: var(--brass); }
@@ -263,6 +266,7 @@ function runApp(){
   let mySeat = null;
   let isSpectator = false;
   let screen = "home";
+  let rulesReturnTo = "home";
   let state = { A: null, B: null };
   let connStatus = { A: false, B: false };
   let unsubA = null, unsubB = null, unsubShared = null, unsubDecks = null;
@@ -1076,6 +1080,55 @@ function runApp(){
     if(screen === "waiting") return renderWaiting();
     if(screen === "game") return renderGame();
     if(screen === "spectate") return renderSpectate();
+    if(screen === "rules") return renderRules();
+  }
+  function openRules(fromScreen){ rulesReturnTo = fromScreen; screen = "rules"; render(); }
+  function backFromRules(){ screen = rulesReturnTo; render(); }
+
+  function renderRules(){
+    app.innerHTML = `
+      <h1 class="title display">ルール</h1>
+      <div class="panel" style="max-width:720px; text-align:left;">
+
+        <h3 class="display" style="margin-top:0;">勝利条件</h3>
+        <ul class="rules-list">
+          <li>相手の体力がゼロになる</li>
+          <li>相手がデッキ枚数0の状態でドローする</li>
+        </ul>
+
+        <h3 class="display">特殊行動</h3>
+        <ul class="rules-list">
+          <li>自分の体力を1つ消費することで、以下のいずれかの効果を発動できる。
+            <ul class="rules-list">
+              <li>デッキからカードを1枚ドローする</li>
+              <li>自陣の偉人1枚を除外する</li>
+            </ul>
+          </li>
+          <li>自分の体力が1になったとき、指揮官能力を発動することができる。</li>
+        </ul>
+
+        <h3 class="display">ターン開始からの流れ</h3>
+        <ul class="rules-list">
+          <li><b>ドローフェーズ</b>:自動で行われる。そのターンが平場か正念場か決定される。正念場の場合、決死値に応じて偉人のステータスが増減する。</li>
+          <li><b>移動・招来フェーズ</b>:偉人を招来する前であればサブゾーンから接続されたメインゾーンに移動できる。移動と招来は1ターン合計2回まで。</li>
+          <li><b>戦闘フェーズ</b>:相手メインゾーンに存在する偉人を攻撃できる。相手メインゾーンに偉人が存在しない場合、相手に直接攻撃できる。</li>
+          <li><b>エンドフェーズ</b>:ターン終了を押すと相手にターンが移動する。</li>
+        </ul>
+
+        <h3 class="display">禁止事項/用語説明</h3>
+        <ul class="rules-list">
+          <li>スピードスターターを持っていない偉人は、招来したターンは攻撃できない。</li>
+          <li>サブゾーンからメインゾーンに移動することはできない。</li>
+          <li>サブゾーンに偉人がいる場合、そのサブゾーンが接続しているメインゾーンには偉人を招来することはできない。</li>
+          <li><b>カバーブロッカー</b>:サポート先の偉人が攻撃されたとき、代わりに攻撃を受けることができる。</li>
+          <li><b>決死値</b>:正念場になった際増減するステータスの値。</li>
+        </ul>
+
+        <div class="hint">このルール一覧は現時点の内容を記録したものです。今後のルール変更はここで更新をお願いしてください。</div>
+        <div class="row" style="margin-top:20px;"><button class="ghost" id="backBtn">戻る</button></div>
+      </div>
+    `;
+    document.getElementById("backBtn").onclick = backFromRules;
   }
 
   function renderHome(){
@@ -1100,9 +1153,10 @@ function runApp(){
         ${errorMsg ? `<div class="hint" style="color:#e2a08a;">${escapeHtml(errorMsg)}</div>` : ""}
         <button class="primary full" id="enterBtn" style="margin-top:6px;">入室する</button>
         <button class="ghost full" id="spectateBtn" style="margin-top:8px;">観戦者として入室する(操作なし・両者の手札が見えます)</button>
-        <div class="row" style="margin-top:14px; justify-content:center; gap:20px;">
+        <div class="row" style="margin-top:14px; justify-content:center; gap:20px; flex-wrap:wrap;">
           <button class="linklike" id="previewBtn">デッキをプレビューする</button>
           <button class="linklike" id="manageBtn">デッキを管理する(登録・編集・削除)</button>
+          <button class="linklike" id="rulesBtn">ルールを確認する</button>
         </div>
         <div class="hint">
           先に部屋番号を決めて友人と共有してください。同じ部屋番号で違う席を選んでそれぞれ入室します。
@@ -1116,6 +1170,7 @@ function runApp(){
     document.getElementById("spectateBtn").onclick = enterAsSpectator;
     document.getElementById("previewBtn").onclick = openDeckPreviewList;
     document.getElementById("manageBtn").onclick = () => openPresetManager("home");
+    document.getElementById("rulesBtn").onclick = () => openRules("home");
   }
 
   function stubHtml(){
@@ -1375,6 +1430,7 @@ function runApp(){
         <div class="row" style="margin-top:16px; flex-wrap:wrap;">
           <button class="ghost" id="backBtn2">戻る</button>
           <button class="ghost" id="redoBtn">デッキを選び直す</button>
+          <button class="ghost" id="rulesBtn2">ルールを確認する</button>
           <button class="primary" id="startBtn" ${!mySub ? "disabled" : ""}>ゲーム開始(自分のデッキをシャッフル)</button>
         </div>
         <div class="hint">相手がまだ準備中でも、自分は先に開始できます。相手の画面はリアルタイムで自動更新されます。</div>
@@ -1382,6 +1438,7 @@ function runApp(){
     `;
     document.getElementById("backBtn2").onclick = leaveRoom;
     document.getElementById("redoBtn").onclick = redoDeckSelection;
+    document.getElementById("rulesBtn2").onclick = () => openRules("waiting");
     document.getElementById("startBtn").onclick = startGame;
   }
 
@@ -1441,7 +1498,10 @@ function runApp(){
       <div class="board">
         <div class="topbar">
           <div class="stub"><span class="code mono">${escapeHtml(roomCode)}</span><span class="seat-tag" style="background:#5a5a5a;">観戦</span></div>
-          <button class="ghost" id="leaveBtn">退室</button>
+          <div class="row">
+            <button class="ghost" id="rulesBtn4">ルール</button>
+            <button class="ghost" id="leaveBtn">退室</button>
+          </div>
         </div>
         ${bothStarted && sharedState.gameInitialized ? `
           <div class="turn-banner">
@@ -1458,6 +1518,7 @@ function runApp(){
       ${modalHtmlSpectate()}
     `;
     document.getElementById("leaveBtn").onclick = leaveRoom;
+    document.getElementById("rulesBtn4").onclick = () => openRules("spectate");
     document.querySelectorAll("[data-peek]").forEach(el => {
       el.onclick = () => {
         const [kind, seat] = el.getAttribute("data-peek").split(":");
@@ -1669,8 +1730,9 @@ function runApp(){
       <div class="board">
         <div class="topbar">
           ${stubHtml()}
-          <div class="row" style="align-items:center;">
+          <div class="row" style="align-items:center; flex-wrap:wrap;">
             <span class="conn-badge ${connStatus[oppSeatKey] ? 'ok':'bad'}">${connStatus[oppSeatKey] ? '相手と接続中' : '相手の応答待ち'}</span>
+            <button class="ghost" id="rulesBtn3">ルール</button>
             <button class="ghost" id="leaveBtn">退室</button>
             <button class="ghost" id="endGameBtn" style="color:#e2a08a;">ゲーム終了</button>
           </div>
@@ -1751,6 +1813,7 @@ function runApp(){
 
     document.getElementById("leaveBtn").onclick = leaveRoom;
     document.getElementById("endGameBtn").onclick = confirmEndGame;
+    document.getElementById("rulesBtn3").onclick = () => openRules("game");
     document.getElementById("drawBtn").onclick = drawCard;
     document.getElementById("searchBtn").onclick = openSearch;
     document.getElementById("shuffleBtn").onclick = manualShuffle;
