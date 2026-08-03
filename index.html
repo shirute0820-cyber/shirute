@@ -153,7 +153,11 @@
   .counter-row{ display:flex; align-items:center; gap:5px; font-size:10.5px; margin-top:3px; padding-top:3px; border-top:1px dashed rgba(0,0,0,0.12); color: var(--ink); font-weight:600; }
   .counter-row button{ width:17px; height:17px; line-height:15px; padding:0; font-size:12px; border-radius:3px; border:1px solid rgba(0,0,0,0.2); background:#efe9da; cursor:pointer; }
   .counter-row button:hover{ background:#e2d9c2; }
-  .card.back{ background: repeating-linear-gradient(45deg, var(--seat-b), var(--seat-b) 6px, #2e5f5a 6px, #2e5f5a 12px); cursor:default; }
+  .card.back{
+    width: 52px; min-width:52px; height: 74px; min-height:0; padding:0;
+    background: repeating-linear-gradient(45deg, var(--seat-b), var(--seat-b) 6px, #2e5f5a 6px, #2e5f5a 12px);
+    cursor:default;
+  }
   .card.back.A{ background: repeating-linear-gradient(45deg, var(--seat-a), var(--seat-a) 6px, #a56e26 6px, #a56e26 12px); }
 
   .deckbox{ display:flex; align-items:center; gap:14px; }
