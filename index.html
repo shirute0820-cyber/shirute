@@ -761,9 +761,18 @@ function runApp(){
     dragData = null;
     if(source === "field") await returnFieldToHand(cardId);
   }
+  async function onRevealDrop(e){
+    e.preventDefault();
+    if(e.currentTarget) e.currentTarget.classList.remove("zone-drag-over");
+    if(!dragData) return;
+    const { cardId, source } = dragData;
+    dragData = null;
+    if(source === "hand") await revealFromHand(cardId);
+  }
   window.onCardDragStart = onCardDragStart;
   window.onZoneDrop = onZoneDrop;
   window.onHandDrop = onHandDrop;
+  window.onRevealDrop = onRevealDrop;
 
   async function discardFromHand(cardId){
     const s = state[mySeat];
@@ -1591,7 +1600,13 @@ function runApp(){
       <div class="zone-board-wrap">
         <div class="zone-board">
           <div class="zone-connectors" style="grid-column:1 / -1; grid-row:2;">${connectorsHtml}</div>
-          <div class="zone-slot" style="grid-column:5; grid-row:1;">
+          <div class="zone-slot" style="grid-column:5; grid-row:1;"
+            ${editable ? `
+              ondragover="event.preventDefault();"
+              ondragenter="this.classList.add('zone-drag-over');"
+              ondragleave="this.classList.remove('zone-drag-over');"
+              ondrop="onRevealDrop(event)"
+            ` : ""}>
             <div class="zone-slot-label">公開</div>
             ${revealCard ? cardHtml(revealCard, editable ? "returnRevealToHand" : "noop", seat, false) : `<div class="zone-empty">なし</div>`}
           </div>
