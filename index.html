@@ -270,6 +270,10 @@ function runApp(){
   let presetManagerReturnTo = "home";
   let presetEditorReturnTo = "presetManager";
 
+  let previewPresets = [];
+  let selectedPreviewId = null;
+  let selectedPreviewDetail = null;
+
   function freshDraft(){
     return {
       deckName: "",
@@ -511,7 +515,30 @@ function runApp(){
   function switchToForm(){ if(draft.bulkText.trim()){ draft.cards = parseBulkText(draft.bulkText); } deckTab = "form"; render(); }
 
   // ---------------- preset manager / editor navigation ----------------
+  const DECK_ADMIN_PASSWORD = "5569";
+  function requireDeckAdminPassword(){
+    const input = window.prompt("デッキ管理用のパスワードを入力してください");
+    if(input === null) return false; // キャンセル
+    if(input !== DECK_ADMIN_PASSWORD){
+      window.alert("パスワードが違います。");
+      return false;
+    }
+    return true;
+  }
+  async function openDeckPreviewList(){
+    previewPresets = await loadPresetIndex();
+    selectedPreviewId = null; selectedPreviewDetail = null;
+    screen = "deckPreview"; render();
+  }
+  async function selectPreviewPreset(id){
+    selectedPreviewId = id;
+    selectedPreviewDetail = await loadPresetById(id);
+    render();
+  }
+  function backFromDeckPreview(){ screen = "home"; render(); }
+
   async function openPresetManager(fromScreen){
+    if(!requireDeckAdminPassword()) return;
     presetManagerReturnTo = fromScreen;
     presetList = await loadPresetIndex();
     screen = "presetManager"; errorMsg = ""; render();
@@ -921,6 +948,7 @@ function runApp(){
   // ---------------- render ----------------
   function render(){
     if(screen === "home") return renderHome();
+    if(screen === "deckPreview") return renderDeckPreview();
     if(screen === "presetManager") return renderPresetManager();
     if(screen === "presetEditor") return renderPresetEditor();
     if(screen === "deckSetup") return renderDeckSetup();
@@ -949,7 +977,8 @@ function runApp(){
         </div>
         ${errorMsg ? `<div class="hint" style="color:#e2a08a;">${escapeHtml(errorMsg)}</div>` : ""}
         <button class="primary full" id="enterBtn" style="margin-top:6px;">入室する</button>
-        <div class="row" style="margin-top:14px; justify-content:center;">
+        <div class="row" style="margin-top:14px; justify-content:center; gap:20px;">
+          <button class="linklike" id="previewBtn">デッキをプレビューする</button>
           <button class="linklike" id="manageBtn">デッキを管理する(登録・編集・削除)</button>
         </div>
         <div class="hint">
@@ -961,6 +990,7 @@ function runApp(){
     document.getElementById("seatA").onclick = () => { selectedSeatChoice = "A"; render(); };
     document.getElementById("seatB").onclick = () => { selectedSeatChoice = "B"; render(); };
     document.getElementById("enterBtn").onclick = enterRoom;
+    document.getElementById("previewBtn").onclick = openDeckPreviewList;
     document.getElementById("manageBtn").onclick = () => openPresetManager("home");
   }
 
@@ -973,6 +1003,47 @@ function runApp(){
       const el = document.getElementById(elId);
       if(el) el.oninput = () => { obj[field] = el.value; };
     });
+  }
+
+  function renderDeckPreview(){
+    const rows = previewPresets.map(p => `
+      <div class="preset-row ${selectedPreviewId===p.id ? 'active':''}" data-preview="${p.id}">
+        <div><div class="pname">${escapeHtml(p.name)}</div><div class="pmeta">${p.cardCount}枚</div></div>
+      </div>
+    `).join("") || `<div class="empty-note">まだデッキが登録されていません。</div>`;
+
+    let detailHtml = "";
+    if(selectedPreviewId && selectedPreviewDetail){
+      const d = selectedPreviewDetail;
+      detailHtml = `
+        <div class="preview-box">
+          <div style="font-weight:700; margin-bottom:6px;">指揮官: ${escapeHtml(d.commander.name)} <span style="opacity:0.6; font-weight:400;">(${escapeHtml(d.commander.affiliation||"—")})</span></div>
+          ${d.commander.effect ? `<div class="hint" style="margin-bottom:10px;">${escapeHtml(d.commander.effect)}</div>` : ""}
+          <div style="font-size:12px; opacity:0.6; margin-bottom:4px;">デッキ内容(${d.cards.length}枚)</div>
+          ${d.cards.map(c => `
+            <div class="preview-cardline">
+              <span class="swatch" style="background:${colorSwatch(c.color)};"></span>
+              <span style="flex:1;">${escapeHtml(c.name)} <span style="opacity:0.5;">/ ${escapeHtml(c.affiliation||"—")}</span>${c.counterLabel ? ` <span style="opacity:0.5;">/「${escapeHtml(c.counterLabel)}」カウンター</span>` : ""}</span>
+              <span class="mono" style="opacity:0.7;">${c.status}(${fmtMod(c.seinenba)})</span>
+            </div>
+            ${c.effect1 ? `<div class="hint" style="margin:2px 0 2px 17px;">①${escapeHtml(c.effect1)}</div>` : ""}
+            ${c.effect2 ? `<div class="hint" style="margin:2px 0 6px 17px;">②${escapeHtml(c.effect2)}</div>` : ""}
+          `).join("")}
+        </div>
+      `;
+    }
+
+    app.innerHTML = `
+      <h1 class="title display">デッキプレビュー</h1>
+      <p class="sub">対戦に入らなくても、登録済みデッキの内容を確認できます(閲覧のみ)。</p>
+      <div class="panel">
+        ${rows}
+        ${detailHtml}
+        <div class="row" style="margin-top:20px;"><button class="ghost" id="backBtn">ホームに戻る</button></div>
+      </div>
+    `;
+    document.getElementById("backBtn").onclick = backFromDeckPreview;
+    document.querySelectorAll("[data-preview]").forEach(el => { el.onclick = () => selectPreviewPreset(el.getAttribute("data-preview")); });
   }
 
   function renderPresetManager(){
@@ -1135,14 +1206,7 @@ function runApp(){
         <div class="preview-box">
           <div style="font-weight:700; margin-bottom:6px;">指揮官: ${escapeHtml(d.commander.name)} <span style="opacity:0.6; font-weight:400;">(${escapeHtml(d.commander.affiliation||"—")})</span></div>
           ${d.commander.effect ? `<div class="hint" style="margin-bottom:10px;">${escapeHtml(d.commander.effect)}</div>` : ""}
-          <div style="font-size:12px; opacity:0.6; margin-bottom:4px;">デッキ内容(${d.cards.length}枚)</div>
-          ${d.cards.map(c => `
-            <div class="preview-cardline">
-              <span class="swatch" style="background:${colorSwatch(c.color)};"></span>
-              <span style="flex:1;">${escapeHtml(c.name)} <span style="opacity:0.5;">/ ${escapeHtml(c.affiliation||"—")}</span></span>
-              <span class="mono" style="opacity:0.7;">${c.status}(${fmtMod(c.seinenba)})</span>
-            </div>
-          `).join("")}
+          <div style="font-size:12px; opacity:0.6;">デッキ内容: ${d.cards.length}枚(カード一覧はホーム画面の「デッキをプレビューする」から確認できます)</div>
         </div>
       `;
     }
@@ -1169,7 +1233,7 @@ function runApp(){
     document.getElementById("backBtn").onclick = leaveRoom;
     document.getElementById("submitBtn").onclick = submitSelectedPreset;
     const cfb = document.getElementById("createFromHereBtn");
-    if(cfb) cfb.onclick = () => openPresetEditor(null, "deckSetup");
+    if(cfb) cfb.onclick = () => { if(requireDeckAdminPassword()) openPresetEditor(null, "deckSetup"); };
     document.querySelectorAll("[data-select]").forEach(el => { el.onclick = () => selectPreset(el.getAttribute("data-select")); });
   }
 
