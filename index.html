@@ -77,6 +77,8 @@
   .built-row .swatch{ width:10px; height:10px; border-radius:50%; flex-shrink:0; }
   .built-row .grow{ flex:1; }
   .built-row .del{ color:#e2a08a; cursor:pointer; font-size:12px; }
+  .built-row .edit-link{ color: var(--brass); cursor:pointer; font-size:12px; }
+  .built-row.editing{ border:1px solid var(--brass); background: rgba(201,162,39,0.12); }
   .count-badge{ font-size:12px; opacity:0.6; }
 
   .preset-row{ display:flex; align-items:center; gap:12px; padding:14px; border-radius:8px; background: rgba(246,241,228,0.04); border:1.5px solid var(--line); margin-bottom:10px; cursor:pointer; transition: all .12s ease; }
@@ -374,7 +376,7 @@ function runApp(){
 
   // ---------------- room seat storage (realtime) ----------------
   function defaultSeatState(){
-    return { commander:null, deck:[], hand:[], field:emptyField(), discard:[], submitted:false, started:false, hp:3, log:[], updatedAt:0 };
+    return { commander:null, deck:[], hand:[], field:emptyField(), discard:[], exclude:[], submitted:false, started:false, hp:3, log:[], updatedAt:0 };
   }
   // Firebase Realtime Databaseは空配列/null/未設定の項目をそのまま保存できず、
   // 読み込み時にキーごと消えることがあるため、読み込んだデータは必ずこれで補完する。
@@ -389,6 +391,7 @@ function runApp(){
       hand: raw.hand || [],
       field: field,
       discard: raw.discard || [],
+      exclude: raw.exclude || [],
       submitted: !!raw.submitted,
       started: !!raw.started,
       hp: typeof raw.hp === "number" ? raw.hp : 3,
@@ -438,6 +441,7 @@ function runApp(){
   }
 
   // ---------------- deck builder helpers ----------------
+  let editingCardGroupSig = null;
   function cardSignature(c){
     return [c.color,c.name,c.affiliation,c.status,c.seinenba,c.effect1,c.effect2,c.counterLabel||""].join("\u0001");
   }
@@ -448,6 +452,10 @@ function runApp(){
     const seinenbaNum = parseInt(f.seinenba, 10);
     let qty = parseInt(f.qty, 10);
     if(isNaN(qty) || qty < 1) qty = 1;
+    if(editingCardGroupSig){
+      draft.cards = draft.cards.filter(c => cardSignature(c) !== editingCardGroupSig);
+      editingCardGroupSig = null;
+    }
     for(let i=0;i<qty;i++){
       draft.cards.push({
         id: uid(), color: f.color.trim(), name: f.name.trim(), affiliation: f.affiliation.trim(),
@@ -458,7 +466,30 @@ function runApp(){
     draft.formCard = { color:f.color, name:"", affiliation:f.affiliation, status:"", seinenba:"", effect1:"", effect2:"", counterLabel:f.counterLabel, qty:"1" };
     errorMsg = ""; render();
   }
-  function removeDraftCardGroup(signature){ draft.cards = draft.cards.filter(c => cardSignature(c) !== signature); render(); }
+  function startEditCardGroup(signature){
+    const sample = draft.cards.find(c => cardSignature(c) === signature);
+    if(!sample) return;
+    const count = draft.cards.filter(c => cardSignature(c) === signature).length;
+    draft.formCard = {
+      color: sample.color || "", name: sample.name || "", affiliation: sample.affiliation || "",
+      status: String(sample.status ?? ""), seinenba: String(sample.seinenba ?? ""),
+      effect1: sample.effect1 || "", effect2: sample.effect2 || "",
+      counterLabel: sample.counterLabel || "", qty: String(count)
+    };
+    editingCardGroupSig = signature;
+    errorMsg = "";
+    render();
+  }
+  function cancelEditCardGroup(){
+    editingCardGroupSig = null;
+    draft.formCard = { color:"", name:"", affiliation:"", status:"", seinenba:"", effect1:"", effect2:"", counterLabel:"", qty:"1" };
+    render();
+  }
+  function removeDraftCardGroup(signature){
+    draft.cards = draft.cards.filter(c => cardSignature(c) !== signature);
+    if(editingCardGroupSig === signature) cancelEditCardGroup();
+    else render();
+  }
   function cardsToBulkText(){
     return draft.cards.map(c => [c.color,c.name,c.affiliation,c.status,c.seinenba,c.effect1,c.effect2,c.counterLabel||""].join("|")).join("\n");
   }
@@ -491,6 +522,7 @@ function runApp(){
   }
   async function openPresetEditor(id, returnTo){
     presetEditorReturnTo = returnTo || "presetManager";
+    editingCardGroupSig = null;
     if(id){
       const p = await loadPresetById(id);
       if(p){
@@ -719,6 +751,7 @@ function runApp(){
     await saveSeat(mySeat, s); render();
   }
   function openDiscardPeek(seat){ modal = { type:"peekDiscard", seat }; render(); }
+  function openDiscardCardMenu(cardId){ modal = { type:"discardCardMenu", cardId }; render(); }
   async function pickFromDiscard(cardId){
     const s = state[mySeat];
     const idx = s.discard.findIndex(c => c.id === cardId);
@@ -726,6 +759,115 @@ function runApp(){
     const [card] = s.discard.splice(idx, 1);
     s.hand.push(card);
     addLog(s, `捨て札から『${card.name}』を手札に加えた`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  async function returnDiscardToDeckTop(cardId){
+    const s = state[mySeat];
+    const idx = s.discard.findIndex(c => c.id === cardId);
+    if(idx === -1) return;
+    const [card] = s.discard.splice(idx, 1);
+    s.deck.unshift(card);
+    addLog(s, `捨て札から『${card.name}』を山札の一番上に戻した`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  async function playFromDiscardToZone(cardId, zoneKey){
+    const s = state[mySeat];
+    if(s.field[zoneKey]) return;
+    const idx = s.discard.findIndex(c => c.id === cardId);
+    if(idx === -1) return;
+    const [card] = s.discard.splice(idx, 1);
+    s.field[zoneKey] = card;
+    addLog(s, `捨て札から『${card.name}』を${ZONE_LABEL[zoneKey]}に出した`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+
+  // ---------------- 除外ゾーン ----------------
+  async function excludeFromHand(cardId){
+    const s = state[mySeat];
+    const idx = s.hand.findIndex(c => c.id === cardId);
+    if(idx === -1) return;
+    const [card] = s.hand.splice(idx, 1);
+    s.exclude.push(card);
+    addLog(s, `『${card.name}』を手札から除外した`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  async function excludeFromField(cardId){
+    const s = state[mySeat];
+    const zoneKey = findFieldZone(s.field, cardId);
+    if(!zoneKey) return;
+    const card = s.field[zoneKey];
+    s.field[zoneKey] = null;
+    s.exclude.push(card);
+    addLog(s, `『${card.name}』を場から除外した`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  async function excludeFromDiscard(cardId){
+    const s = state[mySeat];
+    const idx = s.discard.findIndex(c => c.id === cardId);
+    if(idx === -1) return;
+    const [card] = s.discard.splice(idx, 1);
+    s.exclude.push(card);
+    addLog(s, `捨て札から『${card.name}』を除外した`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  function openDeckExcludePicker(){ modal = { type: "deckExclude" }; render(); }
+  async function excludeFromDeck(cardId){
+    const s = state[mySeat];
+    const idx = s.deck.findIndex(c => c.id === cardId);
+    if(idx === -1) return;
+    const [card] = s.deck.splice(idx, 1);
+    s.exclude.push(card);
+    s.deck = shuffle(s.deck);
+    addLog(s, `山札から『${card.name}』を除外した`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  function openExcludePeek(seat){ modal = { type: "peekExclude", seat }; render(); }
+  function openExcludeCardMenu(cardId){ modal = { type: "excludeCardMenu", cardId }; render(); }
+  async function returnExcludeToHand(cardId){
+    const s = state[mySeat];
+    const idx = s.exclude.findIndex(c => c.id === cardId);
+    if(idx === -1) return;
+    const [card] = s.exclude.splice(idx, 1);
+    s.hand.push(card);
+    addLog(s, `除外から『${card.name}』を手札に戻した`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  async function returnExcludeToDeckTop(cardId){
+    const s = state[mySeat];
+    const idx = s.exclude.findIndex(c => c.id === cardId);
+    if(idx === -1) return;
+    const [card] = s.exclude.splice(idx, 1);
+    s.deck.unshift(card);
+    addLog(s, `除外から『${card.name}』を山札の一番上に戻した`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  async function returnExcludeToDiscard(cardId){
+    const s = state[mySeat];
+    const idx = s.exclude.findIndex(c => c.id === cardId);
+    if(idx === -1) return;
+    const [card] = s.exclude.splice(idx, 1);
+    s.discard.push(card);
+    addLog(s, `除外から『${card.name}』を捨て札に戻した`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  async function playFromExcludeToZone(cardId, zoneKey){
+    const s = state[mySeat];
+    if(s.field[zoneKey]) return;
+    const idx = s.exclude.findIndex(c => c.id === cardId);
+    if(idx === -1) return;
+    const [card] = s.exclude.splice(idx, 1);
+    s.field[zoneKey] = card;
+    addLog(s, `除外から『${card.name}』を${ZONE_LABEL[zoneKey]}に出した`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -886,13 +1028,14 @@ function runApp(){
       groupMap[sig].count++;
     });
     const builtListHtml = groups.map(g => `
-      <div class="built-row">
+      <div class="built-row${editingCardGroupSig===g.sig ? ' editing':''}">
         <span class="swatch" style="background:${colorSwatch(g.sample.color)};"></span>
         <span class="grow">
           <b>${escapeHtml(g.sample.name)}</b>
           <span style="opacity:0.6;"> / ${escapeHtml(g.sample.affiliation||"—")} / ST ${g.sample.status}(${fmtMod(g.sample.seinenba)})${g.sample.counterLabel ? ` / 「${escapeHtml(g.sample.counterLabel)}」カウンター` : ""}</span>
           <span class="mono" style="opacity:0.7;"> ×${g.count}</span>
         </span>
+        <span class="edit-link" data-edit-sig="${encodeURIComponent(g.sig)}">編集</span>
         <span class="del" data-sig="${encodeURIComponent(g.sig)}">削除</span>
       </div>
     `).join("") || `<div class="empty-note">まだカードが登録されていません</div>`;
@@ -935,7 +1078,8 @@ function runApp(){
             <div><label class="small-label">カウンター名(任意・例: 海)</label><input type="text" id="fCounterLabel" value="${escapeHtml(f.counterLabel)}" placeholder="このカードにカウンターが乗らないなら空欄でOK"></div>
             <div><label class="small-label">枚数(同じ内容のカードを一度に登録)</label><input type="number" id="fQty" value="${escapeHtml(f.qty)}" min="1" placeholder="1"></div>
           </div>
-          <button class="small-add full" id="addCardBtn">+ このカードをデッキに追加</button>
+          <button class="small-add full" id="addCardBtn">${editingCardGroupSig ? "変更を保存する" : "+ このカードをデッキに追加"}</button>
+          ${editingCardGroupSig ? `<div class="row" style="margin-top:8px;"><button class="linklike" id="cancelEditBtn">編集をキャンセル</button></div>` : ""}
           <div class="built-list">${builtListHtml}</div>
         ` : `
           <div class="field-row">
@@ -968,6 +1112,9 @@ function runApp(){
       ], draft.formCard);
       document.getElementById("addCardBtn").onclick = addDraftCard;
       document.querySelectorAll(".del").forEach(el => { el.onclick = () => removeDraftCardGroup(decodeURIComponent(el.getAttribute("data-sig"))); });
+      document.querySelectorAll("[data-edit-sig]").forEach(el => { el.onclick = () => startEditCardGroup(decodeURIComponent(el.getAttribute("data-edit-sig"))); });
+      const cancelBtn = document.getElementById("cancelEditBtn");
+      if(cancelBtn) cancelBtn.onclick = cancelEditCardGroup;
     } else {
       const ta = document.getElementById("bulkInput");
       ta.oninput = () => { draft.bulkText = ta.value; };
@@ -1055,7 +1202,7 @@ function runApp(){
     const val = active ? (card.status + card.seinenba) : card.status;
     return `<span class="status ${active?'sein':''}">${val}</span> <span style="opacity:0.5; font-size:10px;">(通常${card.status} / 正念場${fmtMod(card.seinenba)})</span>`;
   }
-  function cardHtml(card, onclickName, seat, editableCounter, dragSource){
+  function cardHtml(card, onclickName, seat, editableCounter, dragSource, inlineEffect){
     const counterRow = card.counterLabel ? `
       <div class="counter-row" onclick="event.stopPropagation();">
         <span>${escapeHtml(card.counterLabel)}: ${card.counter||0}</span>
@@ -1068,10 +1215,11 @@ function runApp(){
     const effectParts = [];
     if(card.effect1) effectParts.push("①" + card.effect1);
     if(card.effect2) effectParts.push("②" + card.effect2);
-    const effectIcon = effectParts.length ? `
+    const effectIcon = (!inlineEffect && effectParts.length) ? `
       <span class="effect-icon" data-effect="${escapeHtml(effectParts.join("\n"))}"
         onmouseenter="showEffectTip(event)" onmouseleave="hideEffectTip()">効果</span>
     ` : "";
+    const effectLines = inlineEffect ? effectParts.map(p => `<div class="ceffect">${escapeHtml(p)}</div>`).join("") : "";
     const dragAttrs = dragSource ? `draggable="true" ondragstart="onCardDragStart(event,'${card.id}','${dragSource}')"` : "";
     return `
       <div class="card${dragSource ? ' draggable' : ''}" ${dragAttrs} onclick="${onclickName}('${card.id}')">
@@ -1081,6 +1229,7 @@ function runApp(){
           <span class="caff">${escapeHtml(card.affiliation || "")}</span>
           ${effectIcon}
         </div>
+        ${effectLines}
         ${counterRow}
       </div>
     `;
@@ -1104,7 +1253,17 @@ function runApp(){
   function cardBackHtml(seatLetter){ return `<div class="card back ${seatLetter}"></div>`; }
   function commanderHtml(cmd, seat){
     if(!cmd) return `<div class="empty-note">未設定</div>`;
-    return `<div class="commander-card" onclick="openCommanderView('${seat}')"><span class="ctag">指揮官</span><span class="cname">${escapeHtml(cmd.name)}</span><span class="caff">${escapeHtml(cmd.affiliation || "")}</span></div>`;
+    const hasEffect = !!(cmd.effect && cmd.effect.trim());
+    return `
+      <div class="commander-card" onclick="openCommanderView('${seat}')">
+        <span class="ctag">指揮官</span>
+        <span class="cname">${escapeHtml(cmd.name)}</span>
+        <div class="caff-row">
+          <span class="caff">${escapeHtml(cmd.affiliation || "")}</span>
+          ${hasEffect ? `<span class="effect-icon" data-effect="${escapeHtml(cmd.effect)}" onmouseenter="showEffectTip(event)" onmouseleave="hideEffectTip()">効果</span>` : ""}
+        </div>
+      </div>
+    `;
   }
   function zoneBoardHtml(fieldObj, seat, editable){
     return `
@@ -1153,7 +1312,7 @@ function runApp(){
 
     const bothStarted = mine.started && opp && opp.started;
     const oppHandBacks = opp ? opp.hand.map(()=>cardBackHtml(oppSeatKey)).join("") : "";
-    const myHandCards = mine.hand.map(c => cardHtml(c, "openHandCardMenu", mySeatKey, true, "hand")).join("");
+    const myHandCards = mine.hand.map(c => cardHtml(c, "openHandCardMenu", mySeatKey, true, "hand", true)).join("");
 
     let mergedLog = [];
     if(mine.log) mergedLog = mergedLog.concat(mine.log.map(e => ({...e, who: mySeatKey})));
@@ -1186,7 +1345,13 @@ function runApp(){
         </div>
 
         <div class="zone">
-          <div class="zone-label"><span>相手(席${oppSeatKey})の場</span><span class="mono" style="opacity:0.6; cursor:pointer;" id="oppDiscardBtn">捨て札を見る(${opp ? opp.discard.length : 0})</span></div>
+          <div class="zone-label">
+            <span>相手(席${oppSeatKey})の場</span>
+            <span class="row" style="gap:10px;">
+              <span class="mono" style="opacity:0.6; cursor:pointer;" id="oppDiscardBtn">捨て札を見る(${opp ? opp.discard.length : 0})</span>
+              <span class="mono" style="opacity:0.6; cursor:pointer;" id="oppExcludeBtn">除外を見る(${opp ? opp.exclude.length : 0})</span>
+            </span>
+          </div>
           ${opp ? zoneBoardHtml(opp.field, oppSeatKey, false) : `<div class="empty-note">なし</div>`}
         </div>
 
@@ -1212,7 +1377,9 @@ function runApp(){
               <button class="act" id="drawBtn" ${mine.deck.length===0?"disabled":""}>ドロー</button>
               <button class="act" id="searchBtn" ${mine.deck.length===0?"disabled":""}>サーチ</button>
               <button class="act" id="shuffleBtn" ${mine.deck.length===0?"disabled":""}>シャッフル</button>
+              <button class="act" id="deckExcludeBtn" ${mine.deck.length===0?"disabled":""}>山札から除外</button>
               <button class="act" id="myDiscardBtn">捨て札(${mine.discard.length})</button>
+              <button class="act" id="myExcludeBtn">除外(${mine.exclude.length})</button>
             </div>
           </div>
           <div class="row between" style="flex-wrap:wrap; gap:14px;">
@@ -1237,6 +1404,9 @@ function runApp(){
     document.getElementById("shuffleBtn").onclick = manualShuffle;
     document.getElementById("myDiscardBtn").onclick = () => openDiscardPeek(mySeatKey);
     document.getElementById("oppDiscardBtn").onclick = () => openDiscardPeek(oppSeatKey);
+    document.getElementById("deckExcludeBtn").onclick = openDeckExcludePicker;
+    document.getElementById("myExcludeBtn").onclick = () => openExcludePeek(mySeatKey);
+    document.getElementById("oppExcludeBtn").onclick = () => openExcludePeek(oppSeatKey);
     document.getElementById("rollBtn").onclick = rollTurnStart;
     document.getElementById("toggleBtn").onclick = toggleTurnState;
 
@@ -1296,6 +1466,7 @@ function runApp(){
           <button class="act" id="mPlay">場に出す</button>
           <button class="act" id="mDiscard">捨てる</button>
           <button class="act" id="mReturn">山札の一番上に戻す</button>
+          <button class="act" id="mExcludeHand" style="color:#e2a08a;">除外する</button>
         </div>
         <div style="margin-top:14px;"><button class="ghost" id="modalCancel">キャンセル</button></div>
       `);
@@ -1310,17 +1481,22 @@ function runApp(){
           <button class="act" id="mMoveZone">他のゾーンに移動</button>
           <button class="act" id="mReturnHand">手札に戻す</button>
           <button class="act" id="mDiscardField">捨てる</button>
+          <button class="act" id="mExcludeField" style="color:#e2a08a;">除外する</button>
         </div>
         <div style="margin-top:14px;"><button class="ghost" id="modalCancel">キャンセル</button></div>
       `);
     }
     if(modal.type === "chooseZone"){
-      const fromHand = modal.source !== "field";
-      const card = fromHand ? mine.hand.find(c => c.id === modal.cardId) : Object.values(mine.field).find(c => c && c.id === modal.cardId);
+      const source = modal.source || "hand";
+      const card = source === "hand" ? mine.hand.find(c => c.id === modal.cardId)
+        : source === "field" ? Object.values(mine.field).find(c => c && c.id === modal.cardId)
+        : source === "discard" ? mine.discard.find(c => c.id === modal.cardId)
+        : mine.exclude.find(c => c.id === modal.cardId);
       if(!card){ modal = null; return ""; }
-      const currentZone = fromHand ? null : findFieldZone(mine.field, modal.cardId);
+      const currentZone = source === "field" ? findFieldZone(mine.field, modal.cardId) : null;
+      const titleVerb = source === "field" ? "どこに移動しますか？" : "どこに出しますか？";
       return overlayWrap(`
-        <h3 class="display">『${escapeHtml(card.name)}』を${fromHand ? "どこに出しますか？" : "どこに移動しますか？"}</h3>
+        <h3 class="display">『${escapeHtml(card.name)}』を${titleVerb}</h3>
         <div class="hint">各ゾーンには1枚までしか置けません。空いているゾーンから選んでください。</div>
         <div class="zone-picker">
           ${ZONE_DEFS.map(z => {
@@ -1351,12 +1527,67 @@ function runApp(){
     if(modal.type === "peekDiscard"){
       const target = modal.seat === mySeatKey ? mine : opp;
       const isMine = modal.seat === mySeatKey;
-      const cards = target ? target.discard.slice().reverse().map(c => cardHtml(c, isMine ? "pickFromDiscard" : "noop", modal.seat, false)).join("") : "";
+      const cards = target ? target.discard.slice().reverse().map(c => cardHtml(c, isMine ? "openDiscardCardMenu" : "noop", modal.seat, false)).join("") : "";
       return overlayWrap(`
         <h3 class="display">席${modal.seat}の捨て札</h3>
-        ${isMine ? `<div class="hint">クリックしたカードを手札に加えます。</div>` : ""}
+        ${isMine ? `<div class="hint">カードをクリックすると、手札・山札・場のどこに戻すか選べます。</div>` : ""}
         <div class="modal-cards">${cards || `<div class="empty-note">捨て札はありません</div>`}</div>
         <div class="row" style="margin-top:10px;"><button class="ghost" id="modalCancel">閉じる</button></div>
+      `);
+    }
+    if(modal.type === "discardCardMenu"){
+      const card = mine.discard.find(c => c.id === modal.cardId);
+      if(!card){ modal = null; return ""; }
+      return overlayWrap(`
+        <h3 class="display">カード詳細</h3>${cardDetailBlock(card, mySeatKey, false)}
+        <div class="row" style="flex-wrap:wrap; margin-top:14px;">
+          <button class="act" id="mDiscardToHand">手札に加える</button>
+          <button class="act" id="mDiscardToDeck">山札に戻す</button>
+          <button class="act" id="mDiscardToField">場に出す</button>
+          <button class="act" id="mDiscardToExclude" style="color:#e2a08a;">除外する</button>
+        </div>
+        <div style="margin-top:14px;" class="row">
+          <button class="ghost" id="mBackToDiscardList">捨て札一覧に戻る</button>
+          <button class="ghost" id="modalCancel">閉じる</button>
+        </div>
+      `);
+    }
+    if(modal.type === "deckExclude"){
+      const cards = mine.deck.map(c => cardHtml(c, "excludeFromDeck", mySeatKey, false)).join("");
+      return overlayWrap(`
+        <h3 class="display">山札から除外するカードを選ぶ</h3>
+        <div class="hint">選んだ1枚を除外に送り、残りは自動でシャッフルされます。</div>
+        <div class="modal-cards">${cards || `<div class="empty-note">山札にカードがありません</div>`}</div>
+        <button class="ghost" id="modalCancel">キャンセル</button>
+      `);
+    }
+    if(modal.type === "peekExclude"){
+      const target = modal.seat === mySeatKey ? mine : opp;
+      const isMine = modal.seat === mySeatKey;
+      const cards = target ? target.exclude.slice().reverse().map(c => cardHtml(c, isMine ? "openExcludeCardMenu" : "noop", modal.seat, false)).join("") : "";
+      return overlayWrap(`
+        <h3 class="display">席${modal.seat}の除外ゾーン</h3>
+        <div class="hint">除外されたカードは基本的にゲーム中に戻ってきません。${isMine ? "誤って送った場合のみ、クリックして手札・山札・場・捨て札のいずれかに戻せます。" : ""}</div>
+        <div class="modal-cards">${cards || `<div class="empty-note">除外されたカードはありません</div>`}</div>
+        <div class="row" style="margin-top:10px;"><button class="ghost" id="modalCancel">閉じる</button></div>
+      `);
+    }
+    if(modal.type === "excludeCardMenu"){
+      const card = mine.exclude.find(c => c.id === modal.cardId);
+      if(!card){ modal = null; return ""; }
+      return overlayWrap(`
+        <h3 class="display">カード詳細</h3>${cardDetailBlock(card, mySeatKey, false)}
+        <div class="hint">誤って除外してしまった場合の復帰用です。</div>
+        <div class="row" style="flex-wrap:wrap; margin-top:14px;">
+          <button class="act" id="mExcludeToHand">手札に戻す</button>
+          <button class="act" id="mExcludeToDeck">山札に戻す</button>
+          <button class="act" id="mExcludeToField">場に出す</button>
+          <button class="act" id="mExcludeToDiscard">捨て札に戻す</button>
+        </div>
+        <div style="margin-top:14px;" class="row">
+          <button class="ghost" id="mBackToExcludeList">除外一覧に戻る</button>
+          <button class="ghost" id="modalCancel">閉じる</button>
+        </div>
       `);
     }
     return "";
@@ -1385,16 +1616,34 @@ function runApp(){
     if(c("mReturn")) c("mReturn").onclick = () => returnToDeckTop(modal.cardId);
     if(c("mReturnHand")) c("mReturnHand").onclick = () => returnFieldToHand(modal.cardId);
     if(c("mDiscardField")) c("mDiscardField").onclick = () => discardFromField(modal.cardId);
+    if(c("mExcludeHand")) c("mExcludeHand").onclick = () => excludeFromHand(modal.cardId);
+    if(c("mExcludeField")) c("mExcludeField").onclick = () => excludeFromField(modal.cardId);
+    if(c("mDiscardToHand")) c("mDiscardToHand").onclick = () => pickFromDiscard(modal.cardId);
+    if(c("mDiscardToDeck")) c("mDiscardToDeck").onclick = () => returnDiscardToDeckTop(modal.cardId);
+    if(c("mDiscardToField")) c("mDiscardToField").onclick = () => openChooseZone(modal.cardId, "discard");
+    if(c("mDiscardToExclude")) c("mDiscardToExclude").onclick = () => excludeFromDiscard(modal.cardId);
+    if(c("mBackToDiscardList")) c("mBackToDiscardList").onclick = () => { modal = { type: "peekDiscard", seat: mySeat }; render(); };
+    if(c("mExcludeToHand")) c("mExcludeToHand").onclick = () => returnExcludeToHand(modal.cardId);
+    if(c("mExcludeToDeck")) c("mExcludeToDeck").onclick = () => returnExcludeToDeckTop(modal.cardId);
+    if(c("mExcludeToField")) c("mExcludeToField").onclick = () => openChooseZone(modal.cardId, "exclude");
+    if(c("mExcludeToDiscard")) c("mExcludeToDiscard").onclick = () => returnExcludeToDiscard(modal.cardId);
+    if(c("mBackToExcludeList")) c("mBackToExcludeList").onclick = () => { modal = { type: "peekExclude", seat: mySeat }; render(); };
     document.querySelectorAll("[data-zone]").forEach(el => {
       el.onclick = () => {
-        if(modal.source === "field") moveFieldToZone(modal.cardId, el.getAttribute("data-zone"));
-        else playToZone(modal.cardId, el.getAttribute("data-zone"));
+        const zoneKey = el.getAttribute("data-zone");
+        if(modal.source === "field") moveFieldToZone(modal.cardId, zoneKey);
+        else if(modal.source === "discard") playFromDiscardToZone(modal.cardId, zoneKey);
+        else if(modal.source === "exclude") playFromExcludeToZone(modal.cardId, zoneKey);
+        else playToZone(modal.cardId, zoneKey);
       };
     });
   }
 
   window.pickFromSearch = pickFromSearch;
   window.pickFromDiscard = pickFromDiscard;
+  window.openDiscardCardMenu = openDiscardCardMenu;
+  window.excludeFromDeck = excludeFromDeck;
+  window.openExcludeCardMenu = openExcludeCardMenu;
   window.openCommanderView = openCommanderView;
   window.adjustCounter = adjustCounter;
   window.adjustHp = adjustHp;
