@@ -156,6 +156,14 @@
   .zone-pick-btn:disabled{ opacity:0.35; cursor:not-allowed; }
   .zone-pick-sub{ font-size:11px; opacity:0.65; }
 
+  .zone-pick-cell{
+    width:128px; min-height:76px; border-radius:7px; cursor:pointer;
+    border:1.5px dashed var(--line); background: rgba(246,241,228,0.06); color: var(--card-face);
+    font-size:12px; display:flex; align-items:center; justify-content:center; text-align:center; padding:8px;
+  }
+  .zone-pick-cell:not(:disabled):hover{ border-color: var(--brass); border-style:solid; background: rgba(201,162,39,0.14); }
+  .zone-pick-cell:disabled{ opacity:0.4; cursor:not-allowed; }
+
   .commander-card{ display:inline-flex; flex-direction:column; gap:2px; min-width:180px; background: linear-gradient(135deg, #2a2116, #1c1710); color: var(--card-face); border: 1px solid rgba(201,162,39,0.5); border-radius:8px; padding:10px 12px; cursor:pointer; }
   .commander-card .ctag{ font-size:10px; color:var(--brass); letter-spacing:0.08em; }
   .commander-card .cname{ font-weight:700; font-size:14.5px; }
@@ -275,6 +283,7 @@ function runApp(){
   let dragData = null;
   let modal = null;
   let selectedSeatChoice = "A";
+  let roomCodeDraft = "";
   let errorMsg = "";
   let deckTab = "form";
 
@@ -1139,7 +1148,7 @@ function runApp(){
         <div class="field-row">
           <label class="small-label">部屋番号(合言葉) — 2人で同じものを入力</label>
           <div class="row">
-            <input type="text" id="roomCodeInput" placeholder="例: ABCD" maxlength="12" style="text-transform:uppercase;">
+            <input type="text" id="roomCodeInput" placeholder="例: ABCD" maxlength="12" style="text-transform:uppercase;" value="${escapeHtml(roomCodeDraft)}">
             <button class="ghost" id="randBtn">ランダム生成</button>
           </div>
         </div>
@@ -1155,15 +1164,19 @@ function runApp(){
         <button class="ghost full" id="spectateBtn" style="margin-top:8px;">観戦者として入室する(操作なし・両者の手札が見えます)</button>
         <div class="row" style="margin-top:14px; justify-content:center; gap:20px; flex-wrap:wrap;">
           <button class="linklike" id="previewBtn">デッキをプレビューする</button>
-          <button class="linklike" id="manageBtn">デッキを管理する(登録・編集・削除)</button>
           <button class="linklike" id="rulesBtn">ルールを確認する</button>
         </div>
         <div class="hint">
           先に部屋番号を決めて友人と共有してください。同じ部屋番号で違う席を選んでそれぞれ入室します。
         </div>
+        <div style="text-align:center; margin-top:10px;">
+          <button class="linklike" id="manageBtn" style="font-size:11px; opacity:0.5;">デッキ管理(登録・編集・削除)</button>
+        </div>
       </div>
     `;
-    document.getElementById("randBtn").onclick = () => { document.getElementById("roomCodeInput").value = randomCode(); };
+    const roomInput = document.getElementById("roomCodeInput");
+    roomInput.oninput = () => { roomCodeDraft = roomInput.value; };
+    document.getElementById("randBtn").onclick = () => { roomCodeDraft = randomCode(); render(); };
     document.getElementById("seatA").onclick = () => { selectedSeatChoice = "A"; render(); };
     document.getElementById("seatB").onclick = () => { selectedSeatChoice = "B"; render(); };
     document.getElementById("enterBtn").onclick = enterRoom;
@@ -1646,9 +1659,8 @@ function runApp(){
   }
   const BOARD_COL_W = 132, BOARD_GAP = 10, BOARD_STEP = BOARD_COL_W + BOARD_GAP;
   function colCenterPx(colIndex){ return (colIndex - 1) * BOARD_STEP + BOARD_COL_W / 2; }
-
-  function zoneBoardHtml(fieldObj, seat, editable, revealCard){
-    const connectorsHtml = ZONE_CONNECTORS.map(c => {
+  function connectorsHtmlBuild(){
+    return ZONE_CONNECTORS.map(c => {
       const xA = colCenterPx(c.fromCol), xB = colCenterPx(c.toCol);
       const left = Math.min(xA, xB), width = Math.abs(xB - xA);
       return `
@@ -1657,6 +1669,31 @@ function runApp(){
         </svg>
       `;
     }).join("");
+  }
+  function zonePickerGridHtml(mine, currentZone){
+    return `
+      <div class="zone-board-wrap">
+        <div class="zone-board">
+          <div class="zone-connectors" style="grid-column:1 / -1; grid-row:2;">${connectorsHtmlBuild()}</div>
+          ${ZONE_DEFS.map(z => {
+            const isCurrent = z.key === currentZone;
+            const occupied = !!mine.field[z.key] && !isCurrent;
+            return `
+              <div class="zone-slot" style="grid-column:${z.col}; grid-row:${z.row};">
+                <div class="zone-slot-label">${z.label}</div>
+                <button class="zone-pick-cell" data-zone="${z.key}" ${(occupied || isCurrent) ? "disabled" : ""}>
+                  ${isCurrent ? "現在の位置" : occupied ? escapeHtml(mine.field[z.key].name) : "選択"}
+                </button>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  function zoneBoardHtml(fieldObj, seat, editable, revealCard){
+    const connectorsHtml = connectorsHtmlBuild();
     return `
       <div class="zone-board-wrap">
         <div class="zone-board">
@@ -1919,19 +1956,8 @@ function runApp(){
       return overlayWrap(`
         <h3 class="display">『${escapeHtml(card.name)}』を${titleVerb}</h3>
         <div class="hint">各ゾーンには1枚までしか置けません。空いているゾーンから選んでください。</div>
-        <div class="zone-picker">
-          ${ZONE_DEFS.map(z => {
-            const isCurrent = z.key === currentZone;
-            const occupied = !!mine.field[z.key] && !isCurrent;
-            return `
-              <button class="zone-pick-btn" data-zone="${z.key}" ${(occupied || isCurrent) ? "disabled" : ""}>
-                ${z.label}
-                ${isCurrent ? `<span class="zone-pick-sub">現在の位置</span>` : occupied ? `<span class="zone-pick-sub">使用中: ${escapeHtml(mine.field[z.key].name)}</span>` : `<span class="zone-pick-sub">空き</span>`}
-              </button>
-            `;
-          }).join("")}
-        </div>
-        <button class="ghost" id="modalCancel">キャンセル</button>
+        ${zonePickerGridHtml(mine, currentZone)}
+        <button class="ghost" id="modalCancel" style="margin-top:10px;">キャンセル</button>
       `);
     }
     if(modal.type === "commander"){
