@@ -98,6 +98,13 @@
   .conn-badge{ font-size:11px; padding:4px 10px; border-radius:20px; display:inline-flex; align-items:center; gap:6px; }
   .conn-badge.ok{ background: rgba(127,191,107,0.15); color:#9fd98c; }
   .conn-badge.bad{ background: rgba(138,58,44,0.25); color:#e2a08a; }
+  .turn-banner{
+    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;
+    padding:10px 16px; border-radius:8px; margin-bottom:14px;
+    background: rgba(246,241,228,0.06); border:1px solid var(--line); font-size:13px;
+  }
+  .turn-banner.mine{ border-color: var(--brass); background: rgba(201,162,39,0.12); }
+  .turn-whose{ font-weight:700; }
 
   .board{ width:100%; max-width: 980px; min-width:0; }
   .topbar{ display:flex; justify-content:space-between; align-items:center; margin-bottom: 16px; flex-wrap:wrap; gap:10px; }
@@ -115,7 +122,7 @@
   /* PC(横幅900px以上)では上下の余白を詰めて、敵味方の場を同時に見やすくする */
   @media (min-width: 900px){
     .zone{ padding: 10px 16px; margin-bottom:8px; }
-    .zone-board{ gap: 14px 10px; padding: 2px 2px 4px; }
+    .zone-board{ gap: 4px 10px; padding: 2px 2px 4px; }
     body{ padding-top:16px; }
   }
   .zone.mine{ border-color: rgba(201,133,47,0.4); }
@@ -123,8 +130,15 @@
   .cards-row{ display:flex; flex-wrap:wrap; gap:10px; min-height: 96px; }
 
   .zone-board-wrap{ overflow-x:auto; padding-bottom:4px; }
-  .zone-board{ display:grid; grid-template-columns: repeat(5, 132px); grid-template-rows: auto auto; gap: 22px 10px; padding: 4px 2px 8px; min-width: 700px; }
-  .zone-slot{ display:flex; flex-direction:column; align-items:center; gap:6px; }
+  .zone-board{ display:grid; grid-template-columns: repeat(5, 132px); grid-template-rows: auto 26px auto; gap: 6px 10px; padding: 4px 2px 8px; min-width: 700px; }
+  .zone-connector{ align-self:stretch; justify-self:stretch; pointer-events:none; }
+  .zone-connector svg{ width:100%; height:100%; display:block; overflow:visible; }
+  .zone-connector line{ stroke: var(--brass); stroke-width:2.5; stroke-dasharray:5 4; opacity:0.55; }
+  .zone-slot{ display:flex; flex-direction:column; align-items:center; gap:6px; position:relative; }
+  .reveal-slot{ position:absolute; top:14px; right:-6px; display:flex; flex-direction:column; align-items:center; gap:2px; z-index:5; }
+  .reveal-slot-label{ font-size:9px; opacity:0.5; letter-spacing:0.05em; }
+  .reveal-empty{ width:52px; min-height:40px; border:1.5px dashed var(--line); border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:9px; opacity:0.3; }
+  .reveal-slot .card{ width:80px; min-height:64px; font-size:9.5px; padding:6px 7px; }
   .zone-slot-label{ font-size:10px; opacity:0.55; letter-spacing:0.05em; text-align:center; }
   .zone-empty{ width:128px; min-height:76px; border:1.5px dashed var(--line); border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:11px; opacity:0.35; }
   .card.draggable{ cursor:grab; }
@@ -256,7 +270,8 @@ function runApp(){
   let state = { A: null, B: null };
   let connStatus = { A: false, B: false };
   let unsubA = null, unsubB = null, unsubShared = null, unsubDecks = null;
-  let sharedState = { turnState: "normal" };
+  let sharedState = { turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false };
+  let gameInitInProgress = false;
   let dragData = null;
   let modal = null;
   let selectedSeatChoice = "A";
@@ -331,13 +346,19 @@ function runApp(){
   }
 
   // 場のゾーン定義。メイン①はサブ①・サブ②に、メイン②はサブ②・サブ③に接続。
-  // 上段(row1)にメイン、下段(row2)にサブを互い違いに配置することでM字型を表現する。
+  // row1にメイン、row3にサブを互い違いに配置し、row2に接続線を描画してM字型を視覚的に表現する。
   const ZONE_DEFS = [
-    { key: "sub1",  label: "サブゾーン①",  row: 2, col: 1 },
+    { key: "sub1",  label: "サブゾーン①",  row: 3, col: 1 },
     { key: "main1", label: "メインゾーン①", row: 1, col: 2 },
-    { key: "sub2",  label: "サブゾーン②",  row: 2, col: 3 },
+    { key: "sub2",  label: "サブゾーン②",  row: 3, col: 3 },
     { key: "main2", label: "メインゾーン②", row: 1, col: 4 },
-    { key: "sub3",  label: "サブゾーン③",  row: 2, col: 5 }
+    { key: "sub3",  label: "サブゾーン③",  row: 3, col: 5 }
+  ];
+  const ZONE_CONNECTORS = [
+    { fromCol: 1, toCol: 2, dir: "asc" },  // サブ①→メイン①
+    { fromCol: 2, toCol: 3, dir: "desc" }, // メイン①→サブ②
+    { fromCol: 3, toCol: 4, dir: "asc" },  // サブ②→メイン②
+    { fromCol: 4, toCol: 5, dir: "desc" }  // メイン②→サブ③
   ];
   const ZONE_KEYS = ZONE_DEFS.map(z => z.key);
   const ZONE_LABEL = {}; ZONE_DEFS.forEach(z => { ZONE_LABEL[z.key] = z.label; });
@@ -381,7 +402,7 @@ function runApp(){
 
   // ---------------- room seat storage (realtime) ----------------
   function defaultSeatState(){
-    return { commander:null, deck:[], hand:[], field:emptyField(), discard:[], exclude:[], submitted:false, started:false, hp:3, log:[], updatedAt:0 };
+    return { commander:null, deck:[], hand:[], field:emptyField(), discard:[], exclude:[], revealSlot:null, submitted:false, started:false, hp:3, log:[], updatedAt:0 };
   }
   // Firebase Realtime Databaseは空配列/null/未設定の項目をそのまま保存できず、
   // 読み込み時にキーごと消えることがあるため、読み込んだデータは必ずこれで補完する。
@@ -397,6 +418,7 @@ function runApp(){
       field: field,
       discard: raw.discard || [],
       exclude: raw.exclude || [],
+      revealSlot: raw.revealSlot || null,
       submitted: !!raw.submitted,
       started: !!raw.started,
       hp: typeof raw.hp === "number" ? raw.hp : 3,
@@ -405,7 +427,12 @@ function runApp(){
     };
   }
   function normalizeShared(raw){
-    return { turnState: (raw && raw.turnState) || "normal" };
+    return {
+      turnState: (raw && raw.turnState) || "normal",
+      currentTurn: (raw && raw.currentTurn) || null,
+      turnNumber: (raw && typeof raw.turnNumber === "number") ? raw.turnNumber : 0,
+      gameInitialized: !!(raw && raw.gameInitialized)
+    };
   }
   async function saveSeat(seat, obj){
     obj.updatedAt = Date.now();
@@ -428,8 +455,14 @@ function runApp(){
       render();
     }, (err) => { console.error(err); connStatus.B = false; render(); });
     unsubShared = onValue(ref(db, `rooms/${roomCode}/shared`), (snap) => {
-      sharedState = normalizeShared(snap.exists() ? snap.val() : null);
-      render();
+      const newShared = normalizeShared(snap.exists() ? snap.val() : null);
+      const wasInitialized = sharedState.gameInitialized;
+      sharedState = newShared;
+      if(wasInitialized && !newShared.gameInitialized && screen === "game"){
+        enterDeckSetup();
+      } else {
+        render();
+      }
     }, (err) => { console.error(err); });
   }
   function detachRoomListeners(){
@@ -538,8 +571,8 @@ function runApp(){
   }
   function backFromDeckPreview(){ screen = "home"; render(); }
 
-  async function openPresetManager(fromScreen){
-    if(!requireDeckAdminPassword()) return;
+  async function openPresetManager(fromScreen, skipPassword){
+    if(!skipPassword && !requireDeckAdminPassword()) return;
     presetManagerReturnTo = fromScreen;
     presetList = await loadPresetIndex();
     screen = "presetManager"; errorMsg = ""; render();
@@ -565,7 +598,7 @@ function runApp(){
   }
   async function backFromPresetEditor(){
     if(presetEditorReturnTo === "deckSetup"){ enterDeckSetup(); }
-    else { await openPresetManager(presetManagerReturnTo || "home"); }
+    else { await openPresetManager(presetManagerReturnTo || "home", true); }
   }
   async function savePresetDraft(){
     if(deckTab === "bulk" && draft.bulkText.trim()){ draft.cards = parseBulkText(draft.bulkText); }
@@ -584,7 +617,7 @@ function runApp(){
       await enterDeckSetup();
       await selectPreset(id);
     } else {
-      await openPresetManager(presetManagerReturnTo || "home");
+      await openPresetManager(presetManagerReturnTo || "home", true);
     }
   }
   function confirmDeletePreset(id){ modal = { type: "confirmDeletePreset", id }; render(); }
@@ -742,7 +775,7 @@ function runApp(){
     if(idx === -1) return;
     const [card] = s.hand.splice(idx, 1);
     s.discard.push(card);
-    addLog(s, `『${card.name}』を手札から捨てた`);
+    addLog(s, `『${card.name}』を手札から墓地に送った`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -774,7 +807,7 @@ function runApp(){
     const card = s.field[zoneKey];
     s.field[zoneKey] = null;
     s.discard.push(card);
-    addLog(s, `『${card.name}』を場から捨てた`);
+    addLog(s, `『${card.name}』を場から墓地に送った`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -786,7 +819,7 @@ function runApp(){
     if(idx === -1) return;
     const [card] = s.discard.splice(idx, 1);
     s.hand.push(card);
-    addLog(s, `捨て札から『${card.name}』を手札に加えた`);
+    addLog(s, `墓地から『${card.name}』を手札に加えた`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -796,7 +829,7 @@ function runApp(){
     if(idx === -1) return;
     const [card] = s.discard.splice(idx, 1);
     s.deck.unshift(card);
-    addLog(s, `捨て札から『${card.name}』を山札の一番上に戻した`);
+    addLog(s, `墓地から『${card.name}』を山札の一番上に戻した`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -807,7 +840,7 @@ function runApp(){
     if(idx === -1) return;
     const [card] = s.discard.splice(idx, 1);
     s.field[zoneKey] = card;
-    addLog(s, `捨て札から『${card.name}』を${ZONE_LABEL[zoneKey]}に出した`);
+    addLog(s, `墓地から『${card.name}』を${ZONE_LABEL[zoneKey]}に出した`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -840,7 +873,7 @@ function runApp(){
     if(idx === -1) return;
     const [card] = s.discard.splice(idx, 1);
     s.exclude.push(card);
-    addLog(s, `捨て札から『${card.name}』を除外した`);
+    addLog(s, `墓地から『${card.name}』を除外した`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -884,7 +917,7 @@ function runApp(){
     if(idx === -1) return;
     const [card] = s.exclude.splice(idx, 1);
     s.discard.push(card);
-    addLog(s, `除外から『${card.name}』を捨て札に戻した`);
+    addLog(s, `除外から『${card.name}』を墓地に戻した`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -901,17 +934,90 @@ function runApp(){
   }
   async function toggleTurnState(){
     const newState = sharedState.turnState === "seinenba" ? "normal" : "seinenba";
-    await saveShared({ turnState: newState });
+    await saveShared({ ...sharedState, turnState: newState });
     const s = state[mySeat];
     addLog(s, newState === "seinenba" ? "正念場(手動切替)にした" : "通常状態(手動切替)に戻した");
     await saveSeat(mySeat, s); render();
   }
-  async function rollTurnStart(){
+
+  // ゲーム開始時の初期化(先攻/後攻決定・初期手札6枚ドロー・最初のターン設定)
+  // 席Aのクライアントのみが実行することで、二重実行による重複ドローを防ぐ。
+  async function maybeInitializeGame(){
+    if(mySeat !== "A" || gameInitInProgress) return;
+    const a = state.A, b = state.B;
+    if(!a || !b || !a.started || !b.started) return;
+    if(sharedState.gameInitialized) return;
+    gameInitInProgress = true;
+    try{
+      const first = Math.random() < 0.5 ? "A" : "B";
+      const aCopy = { ...a, deck: [...a.deck], hand: [...a.hand], log: [...(a.log||[])] };
+      for(let i=0;i<6;i++){ if(aCopy.deck.length) aCopy.hand.push(aCopy.deck.shift()); }
+      addLog(aCopy, "初期手札6枚をドローした");
+      await saveSeat("A", aCopy);
+      const bCopy = { ...b, deck: [...b.deck], hand: [...b.hand], log: [...(b.log||[])] };
+      for(let i=0;i<6;i++){ if(bCopy.deck.length) bCopy.hand.push(bCopy.deck.shift()); }
+      addLog(bCopy, "初期手札6枚をドローした");
+      await saveSeat("B", bCopy);
+      const hit = Math.floor(Math.random()*3) === 0;
+      await saveShared({ turnState: hit ? "seinenba" : "normal", currentTurn: first, turnNumber: 1, gameInitialized: true });
+      state.A = aCopy; state.B = bCopy;
+      render();
+    } finally {
+      gameInitInProgress = false;
+    }
+  }
+
+  async function endTurn(){
+    if(sharedState.currentTurn !== mySeat) return;
+    const nextSeat = otherSeat(mySeat);
     const hit = Math.floor(Math.random()*3) === 0;
-    const newState = hit ? "seinenba" : "normal";
-    await saveShared({ turnState: newState });
+    const newTurnNumber = (sharedState.turnNumber || 1) + 1;
+    const nextData = state[nextSeat];
+    if(nextData){
+      const copy = { ...nextData, deck: [...nextData.deck], hand: [...nextData.hand], log: [...(nextData.log||[])] };
+      if(copy.deck.length){
+        copy.hand.push(copy.deck.shift());
+        addLog(copy, `ターン${newTurnNumber}を開始し、ドローした`);
+      } else {
+        copy.hp = 0;
+        addLog(copy, `ターン${newTurnNumber}開始時に山札が0枚でドローできず、敗北した`);
+      }
+      await saveSeat(nextSeat, copy);
+      state[nextSeat] = copy;
+    }
+    await saveShared({ turnState: hit ? "seinenba" : "normal", currentTurn: nextSeat, turnNumber: newTurnNumber, gameInitialized: true });
     const s = state[mySeat];
-    addLog(s, hit ? "ターン開始抽選 → 正念場が発生した(1/3)" : "ターン開始抽選 → 通常(はずれ)だった");
+    addLog(s, "ターンを終了した");
+    await saveSeat(mySeat, s); render();
+  }
+
+  async function playAgain(){
+    modal = null;
+    await saveShared({ turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false });
+    await saveSeat("A", defaultSeatState());
+    await saveSeat("B", defaultSeatState());
+    await enterDeckSetup();
+  }
+
+  // ---------------- 手札効果の公開(相手に見せる)スロット ----------------
+  async function revealFromHand(cardId){
+    const s = state[mySeat];
+    const idx = s.hand.findIndex(c => c.id === cardId);
+    if(idx === -1) return;
+    if(s.revealSlot){ s.hand.push(s.revealSlot); s.revealSlot = null; }
+    const [card] = s.hand.splice(idx, 1);
+    s.revealSlot = card;
+    addLog(s, `『${card.name}』を公開した`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  async function returnRevealToHand(cardId){
+    const s = state[mySeat];
+    if(!s.revealSlot || s.revealSlot.id !== cardId) return;
+    const card = s.revealSlot;
+    s.revealSlot = null;
+    s.hand.push(card);
+    addLog(s, `公開していた『${card.name}』を手札に戻した`);
     await saveSeat(mySeat, s); render();
   }
 
@@ -923,7 +1029,7 @@ function runApp(){
   function confirmEndGame(){ modal = { type: "confirmEndGame" }; render(); }
   async function doEndGame(){
     const code = roomCode;
-    await Promise.all([ fbRemove(`rooms/${code}/A`), fbRemove(`rooms/${code}/B`) ]);
+    await Promise.all([ fbRemove(`rooms/${code}/A`), fbRemove(`rooms/${code}/B`), fbRemove(`rooms/${code}/shared`) ]);
     modal = null;
     leaveRoom();
   }
@@ -1308,11 +1414,11 @@ function runApp(){
           <div class="zone-label">
             <span>席${seatLabel}の場</span>
             <span class="row" style="gap:10px;">
-              <span class="mono" style="opacity:0.6; cursor:pointer;" data-peek="discard:${seatLabel}">捨て札(${seatData.discard.length})</span>
+              <span class="mono" style="opacity:0.6; cursor:pointer;" data-peek="discard:${seatLabel}">墓地(${seatData.discard.length})</span>
               <span class="mono" style="opacity:0.6; cursor:pointer;" data-peek="exclude:${seatLabel}">除外(${seatData.exclude.length})</span>
             </span>
           </div>
-          ${zoneBoardHtml(seatData.field, seatLabel, false)}
+          ${zoneBoardHtml(seatData.field, seatLabel, false, seatData.revealSlot)}
         </div>
       `;
     }
@@ -1324,12 +1430,21 @@ function runApp(){
     mergedLog = mergedLog.slice(-30);
     const logHtml = mergedLog.map(e => `<div class="log-entry"><span class="mono" style="opacity:0.6;">[${e.ts}]</span> <b style="color:${e.who==='A'?'var(--seat-a)':'var(--seat-b)'}">席${e.who}</b> ${escapeHtml(e.text)}</div>`).join("") || `<div class="empty-note">まだ操作がありません</div>`;
 
+    const bothStarted = a && b && a.started && b.started;
+
     app.innerHTML = `
       <div class="board">
         <div class="topbar">
           <div class="stub"><span class="code mono">${escapeHtml(roomCode)}</span><span class="seat-tag" style="background:#5a5a5a;">観戦</span></div>
           <button class="ghost" id="leaveBtn">退室</button>
         </div>
+        ${bothStarted && sharedState.gameInitialized ? `
+          <div class="turn-banner">
+            <span>ターン ${sharedState.turnNumber || 1}</span>
+            <span class="turn-whose">席${sharedState.currentTurn}の番です</span>
+            <span class="hint" style="margin:0;">正念場: <b style="color:${sharedState.turnState==='seinenba'?'var(--danger)':'inherit'};">${sharedState.turnState==='seinenba' ? "発生中" : "通常"}</b></span>
+          </div>
+        ` : ""}
         ${sideHtml(a, "A")}
         <div style="text-align:center; margin: 10px 0; opacity:0.4; font-size:12px; letter-spacing:0.1em;">— — —</div>
         ${sideHtml(b, "B")}
@@ -1353,7 +1468,7 @@ function runApp(){
       const seat = modal.seat;
       const target = state[seat];
       const key = modal.type === "peekDiscard" ? "discard" : "exclude";
-      const title = modal.type === "peekDiscard" ? `席${seat}の捨て札` : `席${seat}の除外ゾーン`;
+      const title = modal.type === "peekDiscard" ? `席${seat}の墓地` : `席${seat}の除外ゾーン`;
       const cards = target ? target[key].slice().reverse().map(c => cardHtml(c, "noop", seat, false)).join("") : "";
       return overlayWrap(`
         <h3 class="display">${title}</h3>
@@ -1412,6 +1527,26 @@ function runApp(){
       </div>
     `;
   }
+  function gameOverOverlayHtml(mine, opp){
+    const iLost = mine.hp <= 0;
+    const oppLost = opp.hp <= 0;
+    let title, sub;
+    if(iLost && oppLost){ title = "引き分け"; sub = "お互いの体力が0になりました。"; }
+    else if(iLost){ title = "敗北…"; sub = "あなたの体力が0になりました。"; }
+    else { title = "勝利！"; sub = "相手の体力が0になりました。"; }
+    return `
+      <div class="waiting-overlay" style="z-index:60;">
+        <div class="box" style="text-align:center;">
+          <h2 class="display" style="margin:0 0 8px;">${title}</h2>
+          <div class="hint" style="margin-bottom:18px;">${sub}</div>
+          <div class="row" style="justify-content:center;">
+            <button class="ghost" id="gameOverEndBtn">ゲームを終了する</button>
+            <button class="primary" id="gameOverAgainBtn">もう一回プレイする</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
   function hpHtml(seatObj, editable){
     const hp = typeof seatObj.hp === "number" ? seatObj.hp : 3;
     const pips = [1,2,3].map(n => `<span class="hp-pip ${n<=hp?'filled':''}"></span>`).join("");
@@ -1443,10 +1578,18 @@ function runApp(){
       </div>
     `;
   }
-  function zoneBoardHtml(fieldObj, seat, editable){
+  function zoneBoardHtml(fieldObj, seat, editable, revealCard){
+    const connectorsHtml = ZONE_CONNECTORS.map(c => `
+      <div class="zone-connector" style="grid-column:${c.fromCol} / ${c.toCol + 1}; grid-row:2;">
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+          <line x1="0" y1="${c.dir === 'asc' ? 100 : 0}" x2="100" y2="${c.dir === 'asc' ? 0 : 100}" vector-effect="non-scaling-stroke" />
+        </svg>
+      </div>
+    `).join("");
     return `
       <div class="zone-board-wrap">
         <div class="zone-board">
+          ${connectorsHtml}
           ${ZONE_DEFS.map(z => {
             const card = fieldObj[z.key];
             const inner = card
@@ -1458,10 +1601,17 @@ function runApp(){
               ondragleave="this.classList.remove('zone-drag-over');"
               ondrop="onZoneDrop(event,'${z.key}')"
             ` : "";
+            const revealHtml = (z.key === "sub3") ? `
+              <div class="reveal-slot">
+                <div class="reveal-slot-label">公開</div>
+                ${revealCard ? cardHtml(revealCard, editable ? "returnRevealToHand" : "noop", seat, false) : `<div class="reveal-empty">なし</div>`}
+              </div>
+            ` : "";
             return `
               <div class="zone-slot" style="grid-column:${z.col}; grid-row:${z.row};" ${dropAttrs}>
                 <div class="zone-slot-label">${z.label}</div>
                 ${inner}
+                ${revealHtml}
               </div>
             `;
           }).join("")}
@@ -1489,8 +1639,11 @@ function runApp(){
     }
 
     const bothStarted = mine.started && opp && opp.started;
+    if(bothStarted && !sharedState.gameInitialized){ maybeInitializeGame(); }
     const oppHandBacks = opp ? opp.hand.map(()=>cardBackHtml(oppSeatKey)).join("") : "";
     const myHandCards = mine.hand.map(c => cardHtml(c, "openHandCardMenu", mySeatKey, true, "hand", true)).join("");
+    const isMyTurn = sharedState.currentTurn === mySeatKey;
+    const gameOver = bothStarted && (mine.hp <= 0 || opp.hp <= 0);
 
     let mergedLog = [];
     if(mine.log) mergedLog = mergedLog.concat(mine.log.map(e => ({...e, who: mySeatKey})));
@@ -1510,6 +1663,14 @@ function runApp(){
           </div>
         </div>
 
+        ${bothStarted && sharedState.gameInitialized ? `
+          <div class="turn-banner ${isMyTurn ? 'mine' : ''}">
+            <span>ターン ${sharedState.turnNumber || 1}</span>
+            <span class="turn-whose">${isMyTurn ? "あなたの番です" : `相手(席${oppSeatKey})の番です`}</span>
+            <span class="hint" style="margin:0;">正念場: <b style="color:${sharedState.turnState==='seinenba'?'var(--danger)':'inherit'};">${sharedState.turnState==='seinenba' ? "発生中" : "通常"}</b></span>
+          </div>
+        ` : ""}
+
         <div class="zone">
           <div class="zone-label"><span>相手(席${oppSeatKey})</span></div>
           <div class="info-row">
@@ -1526,16 +1687,16 @@ function runApp(){
           <div class="zone-label">
             <span>相手(席${oppSeatKey})の場</span>
             <span class="row" style="gap:10px;">
-              <span class="mono" style="opacity:0.6; cursor:pointer;" id="oppDiscardBtn">捨て札を見る(${opp ? opp.discard.length : 0})</span>
+              <span class="mono" style="opacity:0.6; cursor:pointer;" id="oppDiscardBtn">墓地を見る(${opp ? opp.discard.length : 0})</span>
               <span class="mono" style="opacity:0.6; cursor:pointer;" id="oppExcludeBtn">除外を見る(${opp ? opp.exclude.length : 0})</span>
             </span>
           </div>
-          ${opp ? zoneBoardHtml(opp.field, oppSeatKey, false) : `<div class="empty-note">なし</div>`}
+          ${opp ? zoneBoardHtml(opp.field, oppSeatKey, false, opp.revealSlot) : `<div class="empty-note">なし</div>`}
         </div>
 
         <div class="zone mine">
           <div class="zone-label"><span>あなた(席${mySeatKey})の場</span></div>
-          ${zoneBoardHtml(mine.field, mySeatKey, true)}
+          ${zoneBoardHtml(mine.field, mySeatKey, true, mine.revealSlot)}
         </div>
 
         <div class="zone mine">
@@ -1556,22 +1717,22 @@ function runApp(){
               <button class="act" id="searchBtn" ${mine.deck.length===0?"disabled":""}>サーチ</button>
               <button class="act" id="shuffleBtn" ${mine.deck.length===0?"disabled":""}>シャッフル</button>
               <button class="act" id="deckExcludeBtn" ${mine.deck.length===0?"disabled":""}>山札から除外</button>
-              <button class="act" id="myDiscardBtn">捨て札(${mine.discard.length})</button>
+              <button class="act" id="myDiscardBtn">墓地(${mine.discard.length})</button>
               <button class="act" id="myExcludeBtn">除外(${mine.exclude.length})</button>
             </div>
           </div>
           <div class="row between" style="flex-wrap:wrap; gap:14px;">
-            <div class="hint" style="margin:0;">正念場状態(お互い共通): <b style="color:${sharedState.turnState==='seinenba'?'var(--danger)':'inherit'};">${sharedState.turnState==='seinenba' ? "発生中" : "通常"}</b></div>
             <div class="actions">
-              <button class="act" id="rollBtn">ターン開始抽選(1/3)</button>
-              <button class="act ${sharedState.turnState==='seinenba'?'toggled':''}" id="toggleBtn">手動切替</button>
+              <button class="act" id="toggleBtn" style="font-size:12px; padding:6px 10px;">正念場を手動補正</button>
             </div>
+            <button class="primary" id="endTurnBtn" ${!isMyTurn ? "disabled" : ""}>ターン終了</button>
           </div>
         </div>
 
         <div class="log-panel">${logHtml}</div>
       </div>
       ${!bothStarted ? `<div class="waiting-overlay"><div class="box"><div style="margin-bottom:8px;">相手(席${oppSeatKey})の準備を待っています…</div><div class="hint">相手がゲーム開始ボタンを押すと自動で対戦が始まります。</div></div></div>` : ""}
+      ${gameOver ? gameOverOverlayHtml(mine, opp) : ""}
       ${modalHtml(mine, opp, mySeatKey, oppSeatKey)}
     `;
 
@@ -1585,8 +1746,13 @@ function runApp(){
     document.getElementById("deckExcludeBtn").onclick = openDeckExcludePicker;
     document.getElementById("myExcludeBtn").onclick = () => openExcludePeek(mySeatKey);
     document.getElementById("oppExcludeBtn").onclick = () => openExcludePeek(oppSeatKey);
-    document.getElementById("rollBtn").onclick = rollTurnStart;
     document.getElementById("toggleBtn").onclick = toggleTurnState;
+    const endTurnBtnEl = document.getElementById("endTurnBtn");
+    if(endTurnBtnEl) endTurnBtnEl.onclick = endTurn;
+    const gameOverEndBtn = document.getElementById("gameOverEndBtn");
+    if(gameOverEndBtn) gameOverEndBtn.onclick = confirmEndGame;
+    const gameOverAgainBtn = document.getElementById("gameOverAgainBtn");
+    if(gameOverAgainBtn) gameOverAgainBtn.onclick = playAgain;
 
     window.openHandCardMenu = openHandCardMenu;
     window.openFieldCardMenu = openFieldCardMenu;
@@ -1642,8 +1808,9 @@ function runApp(){
         <h3 class="display">カード詳細</h3>${cardDetailBlock(card, mySeatKey, true)}
         <div class="row" style="flex-wrap:wrap; margin-top:14px;">
           <button class="act" id="mPlay">場に出す</button>
-          <button class="act" id="mDiscard">捨てる</button>
+          <button class="act" id="mDiscard">墓地に送る</button>
           <button class="act" id="mReturn">山札の一番上に戻す</button>
+          <button class="act" id="mReveal">相手に見せる(公開)</button>
           <button class="act" id="mExcludeHand" style="color:#e2a08a;">除外する</button>
         </div>
         <div style="margin-top:14px;"><button class="ghost" id="modalCancel">キャンセル</button></div>
@@ -1658,7 +1825,7 @@ function runApp(){
         <div class="row" style="flex-wrap:wrap; margin-top:14px;">
           <button class="act" id="mMoveZone">他のゾーンに移動</button>
           <button class="act" id="mReturnHand">手札に戻す</button>
-          <button class="act" id="mDiscardField">捨てる</button>
+          <button class="act" id="mDiscardField">墓地に送る</button>
           <button class="act" id="mExcludeField" style="color:#e2a08a;">除外する</button>
         </div>
         <div style="margin-top:14px;"><button class="ghost" id="modalCancel">キャンセル</button></div>
@@ -1707,9 +1874,9 @@ function runApp(){
       const isMine = modal.seat === mySeatKey;
       const cards = target ? target.discard.slice().reverse().map(c => cardHtml(c, isMine ? "openDiscardCardMenu" : "noop", modal.seat, false)).join("") : "";
       return overlayWrap(`
-        <h3 class="display">席${modal.seat}の捨て札</h3>
+        <h3 class="display">席${modal.seat}の墓地</h3>
         ${isMine ? `<div class="hint">カードをクリックすると、手札・山札・場のどこに戻すか選べます。</div>` : ""}
-        <div class="modal-cards">${cards || `<div class="empty-note">捨て札はありません</div>`}</div>
+        <div class="modal-cards">${cards || `<div class="empty-note">墓地はありません</div>`}</div>
         <div class="row" style="margin-top:10px;"><button class="ghost" id="modalCancel">閉じる</button></div>
       `);
     }
@@ -1725,7 +1892,7 @@ function runApp(){
           <button class="act" id="mDiscardToExclude" style="color:#e2a08a;">除外する</button>
         </div>
         <div style="margin-top:14px;" class="row">
-          <button class="ghost" id="mBackToDiscardList">捨て札一覧に戻る</button>
+          <button class="ghost" id="mBackToDiscardList">墓地一覧に戻る</button>
           <button class="ghost" id="modalCancel">閉じる</button>
         </div>
       `);
@@ -1745,7 +1912,7 @@ function runApp(){
       const cards = target ? target.exclude.slice().reverse().map(c => cardHtml(c, isMine ? "openExcludeCardMenu" : "noop", modal.seat, false)).join("") : "";
       return overlayWrap(`
         <h3 class="display">席${modal.seat}の除外ゾーン</h3>
-        <div class="hint">除外されたカードは基本的にゲーム中に戻ってきません。${isMine ? "誤って送った場合のみ、クリックして手札・山札・場・捨て札のいずれかに戻せます。" : ""}</div>
+        <div class="hint">除外されたカードは基本的にゲーム中に戻ってきません。${isMine ? "誤って送った場合のみ、クリックして手札・山札・場・墓地のいずれかに戻せます。" : ""}</div>
         <div class="modal-cards">${cards || `<div class="empty-note">除外されたカードはありません</div>`}</div>
         <div class="row" style="margin-top:10px;"><button class="ghost" id="modalCancel">閉じる</button></div>
       `);
@@ -1760,7 +1927,7 @@ function runApp(){
           <button class="act" id="mExcludeToHand">手札に戻す</button>
           <button class="act" id="mExcludeToDeck">山札に戻す</button>
           <button class="act" id="mExcludeToField">場に出す</button>
-          <button class="act" id="mExcludeToDiscard">捨て札に戻す</button>
+          <button class="act" id="mExcludeToDiscard">墓地に戻す</button>
         </div>
         <div style="margin-top:14px;" class="row">
           <button class="ghost" id="mBackToExcludeList">除外一覧に戻る</button>
@@ -1774,7 +1941,7 @@ function runApp(){
   function overlayWrap(inner){ return `<div class="overlay" id="overlayBg"><div class="modal">${inner}</div></div>`; }
 
   const origRender = render;
-  render = function(){ origRender(); bindGenericModalButtons(); bindGameModalButtons(); };
+  render = function(){ hideEffectTip(); origRender(); bindGenericModalButtons(); bindGameModalButtons(); };
 
   function bindGenericModalButtons(){
     const bg = document.getElementById("overlayBg");
@@ -1795,6 +1962,7 @@ function runApp(){
     if(c("mReturnHand")) c("mReturnHand").onclick = () => returnFieldToHand(modal.cardId);
     if(c("mDiscardField")) c("mDiscardField").onclick = () => discardFromField(modal.cardId);
     if(c("mExcludeHand")) c("mExcludeHand").onclick = () => excludeFromHand(modal.cardId);
+    if(c("mReveal")) c("mReveal").onclick = () => revealFromHand(modal.cardId);
     if(c("mExcludeField")) c("mExcludeField").onclick = () => excludeFromField(modal.cardId);
     if(c("mDiscardToHand")) c("mDiscardToHand").onclick = () => pickFromDiscard(modal.cardId);
     if(c("mDiscardToDeck")) c("mDiscardToDeck").onclick = () => returnDiscardToDeckTop(modal.cardId);
@@ -1821,6 +1989,7 @@ function runApp(){
   window.pickFromDiscard = pickFromDiscard;
   window.openDiscardCardMenu = openDiscardCardMenu;
   window.excludeFromDeck = excludeFromDeck;
+  window.returnRevealToHand = returnRevealToHand;
   window.openExcludeCardMenu = openExcludeCardMenu;
   window.openCommanderView = openCommanderView;
   window.adjustCounter = adjustCounter;
