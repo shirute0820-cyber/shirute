@@ -125,6 +125,11 @@
   .zone-slot{ display:flex; flex-direction:column; align-items:center; gap:6px; }
   .zone-slot-label{ font-size:10px; opacity:0.55; letter-spacing:0.05em; text-align:center; }
   .zone-empty{ width:128px; min-height:76px; border:1.5px dashed var(--line); border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:11px; opacity:0.35; }
+  .card.draggable{ cursor:grab; }
+  .card.draggable:active{ cursor:grabbing; }
+  .zone-slot.zone-drag-over .zone-empty{ border-color: var(--brass); opacity:0.8; background: rgba(201,162,39,0.1); }
+  .zone-slot.zone-drag-over{ outline: 2px dashed var(--brass); outline-offset:3px; border-radius:8px; }
+  .cards-row.zone-drag-over{ outline: 2px dashed var(--brass); outline-offset:3px; border-radius:8px; }
 
   .zone-picker{ display:flex; flex-wrap:wrap; gap:10px; margin:14px 0; }
   .zone-pick-btn{
@@ -247,7 +252,9 @@ function runApp(){
   let screen = "home";
   let state = { A: null, B: null };
   let connStatus = { A: false, B: false };
-  let unsubA = null, unsubB = null, unsubDecks = null;
+  let unsubA = null, unsubB = null, unsubShared = null, unsubDecks = null;
+  let sharedState = { turnState: "normal" };
+  let dragData = null;
   let modal = null;
   let selectedSeatChoice = "A";
   let errorMsg = "";
@@ -367,7 +374,7 @@ function runApp(){
 
   // ---------------- room seat storage (realtime) ----------------
   function defaultSeatState(){
-    return { commander:null, deck:[], hand:[], field:emptyField(), discard:[], submitted:false, started:false, turnState:"normal", hp:3, log:[], updatedAt:0 };
+    return { commander:null, deck:[], hand:[], field:emptyField(), discard:[], submitted:false, started:false, hp:3, log:[], updatedAt:0 };
   }
   // Firebase Realtime Databaseは空配列/null/未設定の項目をそのまま保存できず、
   // 読み込み時にキーごと消えることがあるため、読み込んだデータは必ずこれで補完する。
@@ -384,15 +391,21 @@ function runApp(){
       discard: raw.discard || [],
       submitted: !!raw.submitted,
       started: !!raw.started,
-      turnState: raw.turnState || "normal",
       hp: typeof raw.hp === "number" ? raw.hp : 3,
       log: raw.log || [],
       updatedAt: raw.updatedAt || 0
     };
   }
+  function normalizeShared(raw){
+    return { turnState: (raw && raw.turnState) || "normal" };
+  }
   async function saveSeat(seat, obj){
     obj.updatedAt = Date.now();
     await fbSet(`rooms/${roomCode}/${seat}`, obj);
+  }
+  async function saveShared(obj){
+    obj.updatedAt = Date.now();
+    await fbSet(`rooms/${roomCode}/shared`, obj);
   }
   function attachRoomListeners(){
     detachRoomListeners();
@@ -406,11 +419,17 @@ function runApp(){
       connStatus.B = true;
       render();
     }, (err) => { console.error(err); connStatus.B = false; render(); });
+    unsubShared = onValue(ref(db, `rooms/${roomCode}/shared`), (snap) => {
+      sharedState = normalizeShared(snap.exists() ? snap.val() : null);
+      render();
+    }, (err) => { console.error(err); });
   }
   function detachRoomListeners(){
     if(unsubA){ unsubA(); unsubA = null; }
     if(unsubB){ unsubB(); unsubB = null; }
+    if(unsubShared){ unsubShared(); unsubShared = null; }
     connStatus = { A:false, B:false };
+    sharedState = normalizeShared(null);
   }
   function addLog(seatObj, text){
     seatObj.log = seatObj.log || [];
@@ -627,6 +646,36 @@ function runApp(){
     modal = null;
     await saveSeat(mySeat, s); render();
   }
+
+  // ---------------- drag & drop ----------------
+  function onCardDragStart(e, cardId, source){
+    dragData = { cardId, source };
+    try{
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", cardId);
+    } catch(err){ /* 一部ブラウザでの制約は無視 */ }
+  }
+  async function onZoneDrop(e, zoneKey){
+    e.preventDefault();
+    if(e.currentTarget) e.currentTarget.classList.remove("zone-drag-over");
+    if(!dragData) return;
+    const { cardId, source } = dragData;
+    dragData = null;
+    if(source === "hand") await playToZone(cardId, zoneKey);
+    else if(source === "field") await moveFieldToZone(cardId, zoneKey);
+  }
+  async function onHandDrop(e){
+    e.preventDefault();
+    if(e.currentTarget) e.currentTarget.classList.remove("zone-drag-over");
+    if(!dragData) return;
+    const { cardId, source } = dragData;
+    dragData = null;
+    if(source === "field") await returnFieldToHand(cardId);
+  }
+  window.onCardDragStart = onCardDragStart;
+  window.onZoneDrop = onZoneDrop;
+  window.onHandDrop = onHandDrop;
+
   async function discardFromHand(cardId){
     const s = state[mySeat];
     const idx = s.hand.findIndex(c => c.id === cardId);
@@ -681,15 +730,17 @@ function runApp(){
     await saveSeat(mySeat, s); render();
   }
   async function toggleTurnState(){
+    const newState = sharedState.turnState === "seinenba" ? "normal" : "seinenba";
+    await saveShared({ turnState: newState });
     const s = state[mySeat];
-    s.turnState = s.turnState === "seinenba" ? "normal" : "seinenba";
-    addLog(s, s.turnState === "seinenba" ? "正念場(手動切替)にした" : "通常状態(手動切替)に戻した");
+    addLog(s, newState === "seinenba" ? "正念場(手動切替)にした" : "通常状態(手動切替)に戻した");
     await saveSeat(mySeat, s); render();
   }
   async function rollTurnStart(){
-    const s = state[mySeat];
     const hit = Math.floor(Math.random()*3) === 0;
-    s.turnState = hit ? "seinenba" : "normal";
+    const newState = hit ? "seinenba" : "normal";
+    await saveShared({ turnState: newState });
+    const s = state[mySeat];
     addLog(s, hit ? "ターン開始抽選 → 正念場が発生した(1/3)" : "ターン開始抽選 → 通常(はずれ)だった");
     await saveSeat(mySeat, s); render();
   }
@@ -999,13 +1050,12 @@ function runApp(){
     document.getElementById("startBtn").onclick = startGame;
   }
 
-  function statusHtml(card, seat){
-    const s = state[seat];
-    const active = s && s.turnState === "seinenba";
+  function statusHtml(card){
+    const active = sharedState.turnState === "seinenba";
     const val = active ? (card.status + card.seinenba) : card.status;
     return `<span class="status ${active?'sein':''}">${val}</span> <span style="opacity:0.5; font-size:10px;">(通常${card.status} / 正念場${fmtMod(card.seinenba)})</span>`;
   }
-  function cardHtml(card, onclickName, seat, editableCounter){
+  function cardHtml(card, onclickName, seat, editableCounter, dragSource){
     const counterRow = card.counterLabel ? `
       <div class="counter-row" onclick="event.stopPropagation();">
         <span>${escapeHtml(card.counterLabel)}: ${card.counter||0}</span>
@@ -1022,9 +1072,10 @@ function runApp(){
       <span class="effect-icon" data-effect="${escapeHtml(effectParts.join("\n"))}"
         onmouseenter="showEffectTip(event)" onmouseleave="hideEffectTip()">効果</span>
     ` : "";
+    const dragAttrs = dragSource ? `draggable="true" ondragstart="onCardDragStart(event,'${card.id}','${dragSource}')"` : "";
     return `
-      <div class="card" onclick="${onclickName}('${card.id}')">
-        <div class="toprow"><span class="swatch" style="background:${colorSwatch(card.color)};"></span>${statusHtml(card, seat)}</div>
+      <div class="card${dragSource ? ' draggable' : ''}" ${dragAttrs} onclick="${onclickName}('${card.id}')">
+        <div class="toprow"><span class="swatch" style="background:${colorSwatch(card.color)};"></span>${statusHtml(card)}</div>
         <div class="cname">${escapeHtml(card.name)}</div>
         <div class="caff-row">
           <span class="caff">${escapeHtml(card.affiliation || "")}</span>
@@ -1062,10 +1113,16 @@ function runApp(){
           ${ZONE_DEFS.map(z => {
             const card = fieldObj[z.key];
             const inner = card
-              ? cardHtml(card, editable ? "openFieldCardMenu" : "noop", seat, editable)
+              ? cardHtml(card, editable ? "openFieldCardMenu" : "noop", seat, editable, editable ? "field" : null)
               : `<div class="zone-empty">空き</div>`;
+            const dropAttrs = editable ? `
+              ondragover="event.preventDefault();"
+              ondragenter="this.classList.add('zone-drag-over');"
+              ondragleave="this.classList.remove('zone-drag-over');"
+              ondrop="onZoneDrop(event,'${z.key}')"
+            ` : "";
             return `
-              <div class="zone-slot" style="grid-column:${z.col}; grid-row:${z.row};">
+              <div class="zone-slot" style="grid-column:${z.col}; grid-row:${z.row};" ${dropAttrs}>
                 <div class="zone-slot-label">${z.label}</div>
                 ${inner}
               </div>
@@ -1096,7 +1153,7 @@ function runApp(){
 
     const bothStarted = mine.started && opp && opp.started;
     const oppHandBacks = opp ? opp.hand.map(()=>cardBackHtml(oppSeatKey)).join("") : "";
-    const myHandCards = mine.hand.map(c => cardHtml(c, "openHandCardMenu", mySeatKey, true)).join("");
+    const myHandCards = mine.hand.map(c => cardHtml(c, "openHandCardMenu", mySeatKey, true, "hand")).join("");
 
     let mergedLog = [];
     if(mine.log) mergedLog = mergedLog.concat(mine.log.map(e => ({...e, who: mySeatKey})));
@@ -1146,7 +1203,7 @@ function runApp(){
           </div>
         </div>
 
-        <div class="zone mine"><div class="zone-label"><span>あなた(席${mySeatKey})の手札 — ${mine.hand.length}枚</span></div><div class="cards-row">${myHandCards || `<div class="empty-note">手札はありません</div>`}</div></div>
+        <div class="zone mine"><div class="zone-label"><span>あなた(席${mySeatKey})の手札 — ${mine.hand.length}枚</span></div><div class="cards-row" ondragover="event.preventDefault(); this.classList.add('zone-drag-over');" ondragleave="this.classList.remove('zone-drag-over');" ondrop="onHandDrop(event)">${myHandCards || `<div class="empty-note">手札はありません</div>`}</div></div>
 
         <div class="zone mine">
           <div class="row between" style="flex-wrap:wrap; gap:14px; margin-bottom:12px;">
@@ -1159,10 +1216,10 @@ function runApp(){
             </div>
           </div>
           <div class="row between" style="flex-wrap:wrap; gap:14px;">
-            <div class="hint" style="margin:0;">正念場状態: <b style="color:${mine.turnState==='seinenba'?'var(--danger)':'inherit'};">${mine.turnState==='seinenba' ? "発生中" : "通常"}</b></div>
+            <div class="hint" style="margin:0;">正念場状態(お互い共通): <b style="color:${sharedState.turnState==='seinenba'?'var(--danger)':'inherit'};">${sharedState.turnState==='seinenba' ? "発生中" : "通常"}</b></div>
             <div class="actions">
               <button class="act" id="rollBtn">ターン開始抽選(1/3)</button>
-              <button class="act ${mine.turnState==='seinenba'?'toggled':''}" id="toggleBtn">手動切替</button>
+              <button class="act ${sharedState.turnState==='seinenba'?'toggled':''}" id="toggleBtn">手動切替</button>
             </div>
           </div>
         </div>
