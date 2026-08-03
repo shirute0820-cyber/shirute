@@ -148,8 +148,19 @@
   .card .status{ font-weight:700; font-size:12.5px; }
   .card .status.sein{ color: var(--danger); }
   .card .cname{ font-weight:700; font-size:12.5px; margin-top:1px; }
+  .caff-row{ display:flex; align-items:center; justify-content:space-between; gap:6px; }
   .card .caff{ color: var(--ink-soft); font-size:10.5px; }
-  .card .ceffect{ color: var(--ink-soft); font-size:10px; }
+  .effect-icon{
+    flex-shrink:0; font-size:9px; font-weight:700; color: var(--ink-soft);
+    border:1px solid rgba(0,0,0,0.25); border-radius:9px; padding:1px 6px; cursor:help;
+    background: rgba(0,0,0,0.05);
+  }
+  .card-tooltip{
+    display:none; position:fixed; z-index:200; max-width:220px;
+    background:#1c1710; color:#f6f1e4; padding:9px 11px; border-radius:7px;
+    font-size:11.5px; line-height:1.6; white-space:pre-line;
+    box-shadow:0 6px 16px rgba(0,0,0,0.45); pointer-events:none;
+  }
   .counter-row{ display:flex; align-items:center; gap:5px; font-size:10.5px; margin-top:3px; padding-top:3px; border-top:1px dashed rgba(0,0,0,0.12); color: var(--ink); font-weight:600; }
   .counter-row button{ width:17px; height:17px; line-height:15px; padding:0; font-size:12px; border-radius:3px; border:1px solid rgba(0,0,0,0.2); background:#efe9da; cursor:pointer; }
   .counter-row button:hover{ background:#e2d9c2; }
@@ -186,6 +197,7 @@
 </head>
 <body>
 <div id="app"></div>
+<div id="cardTooltip" class="card-tooltip"></div>
 
 <script type="module">
 /* =====================================================================
@@ -263,6 +275,28 @@ function runApp(){
   function escapeHtml(s){
     return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   }
+  function showEffectTip(e){
+    const el = e.currentTarget;
+    const text = el.getAttribute("data-effect") || "";
+    const tip = document.getElementById("cardTooltip");
+    if(!tip) return;
+    tip.textContent = text;
+    tip.style.display = "block";
+    const rect = el.getBoundingClientRect();
+    const tipRect = tip.getBoundingClientRect();
+    let top = rect.top - tipRect.height - 8;
+    if(top < 8) top = rect.bottom + 8;
+    let left = rect.left + rect.width/2 - tipRect.width/2;
+    left = Math.max(8, Math.min(left, window.innerWidth - tipRect.width - 8));
+    tip.style.top = top + "px";
+    tip.style.left = left + "px";
+  }
+  function hideEffectTip(){
+    const tip = document.getElementById("cardTooltip");
+    if(tip) tip.style.display = "none";
+  }
+  window.showEffectTip = showEffectTip;
+  window.hideEffectTip = hideEffectTip;
   function uid(){ return Math.random().toString(36).slice(2,10); }
   function nowLabel(){ const d = new Date(); return d.getHours().toString().padStart(2,"0")+":"+d.getMinutes().toString().padStart(2,"0"); }
   function shuffle(arr){
@@ -981,13 +1015,21 @@ function runApp(){
         ` : ""}
       </div>
     ` : "";
+    const effectParts = [];
+    if(card.effect1) effectParts.push("①" + card.effect1);
+    if(card.effect2) effectParts.push("②" + card.effect2);
+    const effectIcon = effectParts.length ? `
+      <span class="effect-icon" data-effect="${escapeHtml(effectParts.join("\n"))}"
+        onmouseenter="showEffectTip(event)" onmouseleave="hideEffectTip()">効果</span>
+    ` : "";
     return `
       <div class="card" onclick="${onclickName}('${card.id}')">
         <div class="toprow"><span class="swatch" style="background:${colorSwatch(card.color)};"></span>${statusHtml(card, seat)}</div>
         <div class="cname">${escapeHtml(card.name)}</div>
-        <div class="caff">${escapeHtml(card.affiliation || "")}</div>
-        ${card.effect1 ? `<div class="ceffect">①${escapeHtml(card.effect1)}</div>` : ""}
-        ${card.effect2 ? `<div class="ceffect">②${escapeHtml(card.effect2)}</div>` : ""}
+        <div class="caff-row">
+          <span class="caff">${escapeHtml(card.affiliation || "")}</span>
+          ${effectIcon}
+        </div>
         ${counterRow}
       </div>
     `;
