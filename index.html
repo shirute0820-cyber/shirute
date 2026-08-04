@@ -284,7 +284,7 @@ function runApp(){
   let state = { A: null, B: null };
   let connStatus = { A: false, B: false };
   let unsubA = null, unsubB = null, unsubShared = null, unsubDecks = null;
-  let sharedState = { turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false, dealt: false, firstPlayer: null };
+  let sharedState = { turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false, dealt: false, firstPlayer: null, ended: false };
   let gameInitInProgress = false;
   let dragData = null;
   let modal = null;
@@ -452,7 +452,8 @@ function runApp(){
       turnNumber: (raw && typeof raw.turnNumber === "number") ? raw.turnNumber : 0,
       gameInitialized: !!(raw && raw.gameInitialized),
       dealt: !!(raw && raw.dealt),
-      firstPlayer: (raw && raw.firstPlayer) || null
+      firstPlayer: (raw && raw.firstPlayer) || null,
+      ended: !!(raw && raw.ended)
     };
   }
   async function saveSeat(seat, obj){
@@ -479,7 +480,7 @@ function runApp(){
       const newShared = normalizeShared(snap.exists() ? snap.val() : null);
       const wasInitialized = sharedState.gameInitialized;
       sharedState = newShared;
-      if(wasInitialized && !newShared.gameInitialized && screen === "game"){
+      if(wasInitialized && !newShared.gameInitialized && !newShared.dealt && !newShared.ended && screen === "game"){
         enterDeckSetup();
       } else {
         render();
@@ -999,7 +1000,7 @@ function runApp(){
       for(let i=0;i<6;i++){ if(bCopy.deck.length) bCopy.hand.push(bCopy.deck.shift()); }
       addLog(bCopy, "初期手札6枚をドローした");
       await saveSeat("B", bCopy);
-      await saveShared({ turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false, dealt: true, firstPlayer: first });
+      await saveShared({ turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false, dealt: true, firstPlayer: first, ended: false });
       state.A = aCopy; state.B = bCopy;
       render();
     } finally {
@@ -1015,7 +1016,7 @@ function runApp(){
     gameInitInProgress = true;
     try{
       const hit = Math.floor(Math.random()*3) === 0;
-      await saveShared({ turnState: hit ? "seinenba" : "normal", currentTurn: sharedState.firstPlayer || "A", turnNumber: 1, gameInitialized: true, dealt: true, firstPlayer: sharedState.firstPlayer || "A" });
+      await saveShared({ turnState: hit ? "seinenba" : "normal", currentTurn: sharedState.firstPlayer || "A", turnNumber: 1, gameInitialized: true, dealt: true, firstPlayer: sharedState.firstPlayer || "A", ended: false });
       render();
     } finally {
       gameInitInProgress = false;
@@ -1116,7 +1117,7 @@ function runApp(){
   async function playAgain(){
     modal = null;
     mulliganSelected = [];
-    await saveShared({ turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false, dealt: false, firstPlayer: null });
+    await saveShared({ turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false, dealt: false, firstPlayer: null, ended: false });
     await saveSeat("A", defaultSeatState());
     await saveSeat("B", defaultSeatState());
     await enterDeckSetup();
@@ -1152,7 +1153,9 @@ function runApp(){
   function confirmEndGame(){ modal = { type: "confirmEndGame" }; render(); }
   async function doEndGame(){
     const code = roomCode;
-    await Promise.all([ fbRemove(`rooms/${code}/A`), fbRemove(`rooms/${code}/B`), fbRemove(`rooms/${code}/shared`) ]);
+    // 先にended:trueを書き込み、相手側に「再戦」ではなく「終了」であることを伝える
+    await fbSet(`rooms/${code}/shared`, { turnState:"normal", currentTurn:null, turnNumber:0, gameInitialized:false, dealt:false, firstPlayer:null, ended:true, updatedAt: Date.now() });
+    await Promise.all([ fbRemove(`rooms/${code}/A`), fbRemove(`rooms/${code}/B`) ]);
     modal = null;
     leaveRoom();
   }
@@ -2005,6 +2008,7 @@ function runApp(){
       ${mulliganPhase && !mine.mulliganDone ? mulliganOverlayHtml(mine) : ""}
       ${mulliganPhase && mine.mulliganDone ? `<div class="waiting-overlay"><div class="box"><div style="margin-bottom:8px;">相手(席${oppSeatKey})のマリガンを待っています…</div><div class="hint">相手が選び終えると自動でゲームが始まります。</div></div></div>` : ""}
       ${gameOver ? gameOverOverlayHtml(mine, opp) : ""}
+      ${sharedState.ended ? `<div class="waiting-overlay" style="z-index:65;"><div class="box" style="text-align:center;"><div style="margin-bottom:8px;">相手がゲームを終了しました。</div><button class="primary" id="endedBackBtn" style="margin-top:8px;">ホームに戻る</button></div></div>` : ""}
       ${modalHtml(mine, opp, mySeatKey, oppSeatKey)}
     `;
 
@@ -2030,6 +2034,8 @@ function runApp(){
     if(gameOverEndBtn) gameOverEndBtn.onclick = confirmEndGame;
     const gameOverAgainBtn = document.getElementById("gameOverAgainBtn");
     if(gameOverAgainBtn) gameOverAgainBtn.onclick = playAgain;
+    const endedBackBtn = document.getElementById("endedBackBtn");
+    if(endedBackBtn) endedBackBtn.onclick = leaveRoom;
 
     window.openHandCardMenu = openHandCardMenu;
     window.openFieldCardMenu = openFieldCardMenu;
