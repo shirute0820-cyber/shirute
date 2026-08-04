@@ -462,6 +462,12 @@ function runApp(){
       ended: !!(raw && raw.ended)
     };
   }
+  // 全体を通した手番の通し番号(turnNumber)と先攻情報から、各プレイヤー個別のターン数を算出する
+  function playerTurnCount(seat){
+    const n = sharedState.turnNumber || 0;
+    if(n === 0 || !sharedState.firstPlayer) return 0;
+    return seat === sharedState.firstPlayer ? Math.ceil(n/2) : Math.floor(n/2);
+  }
   async function saveSeat(seat, obj){
     obj.updatedAt = Date.now();
     await fbSet(`rooms/${roomCode}/${seat}`, obj);
@@ -1789,7 +1795,7 @@ function runApp(){
         </div>
         ${bothStarted && sharedState.gameInitialized ? `
           <div class="turn-banner">
-            <span>ターン ${sharedState.turnNumber || 1}</span>
+            <span>席A: ${playerTurnCount("A")}ターン目 ／ 席B: ${playerTurnCount("B")}ターン目</span>
             <span class="turn-whose">席${sharedState.currentTurn}の番です</span>
             <span class="hint" style="margin:0;">正念場: <b style="color:${sharedState.turnState==='seinenba'?'var(--danger)':'inherit'};">${sharedState.turnState==='seinenba' ? "発生中" : "通常"}</b></span>
           </div>
@@ -2079,7 +2085,7 @@ function runApp(){
 
         ${bothStarted && sharedState.gameInitialized ? `
           <div class="turn-banner ${isMyTurn ? 'mine' : ''}">
-            <span>ターン ${sharedState.turnNumber || 1}</span>
+            <span>あなた: ${playerTurnCount(mySeatKey)}ターン目 ／ 相手: ${playerTurnCount(oppSeatKey)}ターン目</span>
             <span class="turn-whose">${isMyTurn ? "あなたの番です" : `相手(席${oppSeatKey})の番です`}</span>
             <span class="hint" style="margin:0;">正念場: <b style="color:${sharedState.turnState==='seinenba'?'var(--danger)':'inherit'};">${sharedState.turnState==='seinenba' ? "発生中" : "通常"}</b></span>
           </div>
