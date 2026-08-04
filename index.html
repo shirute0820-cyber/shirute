@@ -194,6 +194,11 @@
   .counter-row{ display:flex; align-items:center; gap:5px; font-size:10.5px; margin-top:3px; padding-top:3px; border-top:1px dashed rgba(0,0,0,0.12); color: var(--ink); font-weight:600; }
   .counter-row button{ width:17px; height:17px; line-height:15px; padding:0; font-size:12px; border-radius:3px; border:1px solid rgba(0,0,0,0.2); background:#efe9da; cursor:pointer; }
   .counter-row button:hover{ background:#e2d9c2; }
+  .status.adj{ color: #1d6e5c; }
+  .stat-adjust-row{ display:flex; align-items:center; gap:4px; margin-top:3px; padding-top:3px; border-top:1px dashed rgba(0,0,0,0.12); flex-wrap:wrap; }
+  .stat-adjust-row button{ font-size:9.5px; padding:2px 5px; border-radius:3px; border:1px solid rgba(0,0,0,0.2); background:#efe9da; color:var(--ink); cursor:pointer; }
+  .stat-adjust-row button:hover{ background:#e2d9c2; }
+  .stat-adjust-row button.reset{ background: rgba(29,110,92,0.15); border-color:#1d6e5c; color:#1d6e5c; font-weight:700; }
   .card.back{
     width: 52px; min-width:52px; height: 74px; min-height:0; padding:0;
     background: repeating-linear-gradient(45deg, var(--seat-b), var(--seat-b) 6px, #2e5f5a 6px, #2e5f5a 12px);
@@ -669,7 +674,7 @@ function runApp(){
     if(!preset){ errorMsg = "デッキの読み込みに失敗しました。"; render(); return; }
     const s = defaultSeatState();
     s.commander = { affiliation: preset.commander.affiliation, name: preset.commander.name, effect: preset.commander.effect };
-    s.deck = preset.cards.map(c => ({ ...c, id: uid(), counter: 0 }));
+    s.deck = preset.cards.map(c => ({ ...c, id: uid(), counter: 0, statAdjust: 0 }));
     s.stackLabel = preset.stackLabel || "";
     s.stack = 0;
     s.submitted = true;
@@ -711,6 +716,7 @@ function runApp(){
     await saveSeat(mySeat, s); render();
   }
   function openSearch(){ modal = { type:"search" }; render(); }
+  function openSearchCardMenu(cardId){ modal = { type:"searchCardMenu", cardId }; render(); }
   async function pickFromSearch(cardId){
     const s = state[mySeat];
     const idx = s.deck.findIndex(c => c.id === cardId);
@@ -718,7 +724,30 @@ function runApp(){
     const [card] = s.deck.splice(idx, 1);
     s.hand.push(card);
     s.deck = shuffle(s.deck);
-    addLog(s, `サーチで『${card.name}』を手札に加えた`);
+    addLog(s, `デッキカード移動で『${card.name}』を手札に加えた`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  async function sendSearchToDiscard(cardId){
+    const s = state[mySeat];
+    const idx = s.deck.findIndex(c => c.id === cardId);
+    if(idx === -1) return;
+    const [card] = s.deck.splice(idx, 1);
+    s.discard.push(card);
+    s.deck = shuffle(s.deck);
+    addLog(s, `デッキカード移動で『${card.name}』を墓地に送った`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  async function playFromDeckToZone(cardId, zoneKey){
+    const s = state[mySeat];
+    if(s.field[zoneKey]) return;
+    const idx = s.deck.findIndex(c => c.id === cardId);
+    if(idx === -1) return;
+    const [card] = s.deck.splice(idx, 1);
+    s.field[zoneKey] = card;
+    s.deck = shuffle(s.deck);
+    addLog(s, `デッキカード移動で『${card.name}』を${ZONE_LABEL[zoneKey]}に緊急招来した`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -732,6 +761,26 @@ function runApp(){
     const card = s.hand.find(c => c.id === cardId) || Object.values(s.field).find(c => c && c.id === cardId) || s.discard.find(c => c.id === cardId);
     if(!card) return;
     card.counter = Math.max(0, (card.counter || 0) + delta);
+    await saveSeat(mySeat, s); render();
+  }
+  async function adjustFieldStat(cardId, delta){
+    const s = state[mySeat];
+    const zoneKey = findFieldZone(s.field, cardId);
+    if(!zoneKey) return;
+    const card = s.field[zoneKey];
+    let next = (card.statAdjust || 0) + delta;
+    if(card.status + next < 0) next = -card.status; // 合計が0未満にならないようにする
+    card.statAdjust = next;
+    addLog(s, `『${card.name}』のステータスを${delta > 0 ? "+" : ""}${delta}調整した(現在${fmtMod(card.statAdjust)})`);
+    await saveSeat(mySeat, s); render();
+  }
+  async function resetFieldStat(cardId){
+    const s = state[mySeat];
+    const zoneKey = findFieldZone(s.field, cardId);
+    if(!zoneKey) return;
+    const card = s.field[zoneKey];
+    card.statAdjust = 0;
+    addLog(s, `『${card.name}』のステータス調整を元に戻した`);
     await saveSeat(mySeat, s); render();
   }
   async function adjustHp(delta){
@@ -763,11 +812,15 @@ function runApp(){
     const fromZone = findFieldZone(s.field, cardId);
     if(!fromZone){ modal = null; render(); return; }
     if(fromZone === targetZone){ modal = null; render(); return; }
-    if(s.field[targetZone]) return; // 移動先が既に埋まっている
-    const card = s.field[fromZone];
-    s.field[fromZone] = null;
-    s.field[targetZone] = card;
-    addLog(s, `『${card.name}』を${ZONE_LABEL[fromZone]}から${ZONE_LABEL[targetZone]}に移動した`);
+    const movingCard = s.field[fromZone];
+    const targetCard = s.field[targetZone];
+    s.field[fromZone] = targetCard || null;
+    s.field[targetZone] = movingCard;
+    if(targetCard){
+      addLog(s, `『${movingCard.name}』と『${targetCard.name}』を入れ替えた(${ZONE_LABEL[fromZone]}⇔${ZONE_LABEL[targetZone]})`);
+    } else {
+      addLog(s, `『${movingCard.name}』を${ZONE_LABEL[fromZone]}から${ZONE_LABEL[targetZone]}に移動した`);
+    }
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -835,6 +888,7 @@ function runApp(){
     const zoneKey = findFieldZone(s.field, cardId);
     if(!zoneKey) return;
     const card = s.field[zoneKey];
+    card.statAdjust = 0;
     s.field[zoneKey] = null;
     s.hand.push(card);
     addLog(s, `『${card.name}』を場から手札に戻した`);
@@ -846,6 +900,7 @@ function runApp(){
     const zoneKey = findFieldZone(s.field, cardId);
     if(!zoneKey) return;
     const card = s.field[zoneKey];
+    card.statAdjust = 0;
     s.field[zoneKey] = null;
     s.discard.push(card);
     addLog(s, `『${card.name}』を場から墓地に送った`);
@@ -902,6 +957,7 @@ function runApp(){
     const zoneKey = findFieldZone(s.field, cardId);
     if(!zoneKey) return;
     const card = s.field[zoneKey];
+    card.statAdjust = 0;
     s.field[zoneKey] = null;
     s.exclude.push(card);
     addLog(s, `『${card.name}』を場から除外した`);
@@ -1142,8 +1198,20 @@ function runApp(){
     s.revealSlot = null;
     s.hand.push(card);
     addLog(s, `公開していた『${card.name}』を手札に戻した`);
+    modal = null;
     await saveSeat(mySeat, s); render();
   }
+  async function sendRevealToDiscard(cardId){
+    const s = state[mySeat];
+    if(!s.revealSlot || s.revealSlot.id !== cardId) return;
+    const card = s.revealSlot;
+    s.revealSlot = null;
+    s.discard.push(card);
+    addLog(s, `公開していた『${card.name}』を墓地に送った`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  function openRevealCardMenu(cardId){ modal = { type: "revealCardMenu", cardId }; render(); }
 
   function leaveRoom(){
     detachRoomListeners();
@@ -1438,7 +1506,7 @@ function runApp(){
 
         <h3 class="display" style="margin-top:22px;">① 指揮官カード(1枚・デッキとは別枠)</h3>
         <div class="grid2 field-row">
-          <div><label class="small-label">所属</label><input type="text" id="cmdAff" value="${escapeHtml(c.affiliation)}" placeholder="例: 海賊"></div>
+          <div><label class="small-label">肩書</label><input type="text" id="cmdAff" value="${escapeHtml(c.affiliation)}" placeholder="例: 海賊"></div>
           <div><label class="small-label">名前</label><input type="text" id="cmdName" value="${escapeHtml(c.name)}" placeholder="例: フランシス・ドレーク"></div>
         </div>
         <div class="field-row"><label class="small-label">効果</label><textarea id="cmdEffect" style="min-height:70px;" placeholder="指揮官の効果テキスト">${escapeHtml(c.effect)}</textarea></div>
@@ -1464,7 +1532,7 @@ function runApp(){
             <div><label class="small-label">正念場の修正値</label><input type="number" id="fSeinenba" value="${escapeHtml(f.seinenba)}" placeholder="600 または -400"></div>
           </div>
           <div class="grid2 field-row">
-            <div><label class="small-label">所属</label><input type="text" id="fAffiliation" value="${escapeHtml(f.affiliation)}" placeholder="例: 海賊"></div>
+            <div><label class="small-label">肩書</label><input type="text" id="fAffiliation" value="${escapeHtml(f.affiliation)}" placeholder="例: 海賊"></div>
             <div><label class="small-label">名前</label><input type="text" id="fName" value="${escapeHtml(f.name)}" placeholder="カード名"></div>
           </div>
           <div class="grid2 field-row">
@@ -1480,7 +1548,7 @@ function runApp(){
           <div class="built-list">${builtListHtml}</div>
         ` : `
           <div class="field-row">
-            <label class="small-label">1行1枚、「属性|名前|所属|ステータス|正念場修正値|効果①|効果②|カウンター名|枚数」の順で入力(効果・カウンター名・枚数は省略可)</label>
+            <label class="small-label">1行1枚、「属性|名前|肩書|ステータス|正念場修正値|効果①|効果②|カウンター名|枚数」の順で入力(効果・カウンター名・枚数は省略可)</label>
             <textarea id="bulkInput" style="min-height:220px;">${escapeHtml(draft.bulkText)}</textarea>
           </div>
           <div class="hint">正念場修正値がマイナスの場合はそのまま「-400」のように入力してください。枚数を省略すると1枚として扱われます。</div>
@@ -1699,7 +1767,7 @@ function runApp(){
       if(!cmd){ modal = null; return ""; }
       return overlayWrap(`
         <h3 class="display">指揮官: ${escapeHtml(cmd.name)}</h3>
-        <div class="modal-detail-row">所属: ${escapeHtml(cmd.affiliation || "—")}</div>
+        <div class="modal-detail-row">肩書: ${escapeHtml(cmd.affiliation || "—")}</div>
         ${cmd.effect ? `<div class="modal-detail-row">${escapeHtml(cmd.effect)}</div>` : ""}
         <div style="margin-top:14px;"><button class="ghost" id="modalCancel">閉じる</button></div>
       `);
@@ -1709,10 +1777,12 @@ function runApp(){
 
   function statusHtml(card){
     const active = sharedState.turnState === "seinenba";
-    const val = active ? (card.status + card.seinenba) : card.status;
-    return `<span class="status ${active?'sein':''}">${val}</span> <span style="opacity:0.5; font-size:10px;">(通常${card.status} / 正念場${fmtMod(card.seinenba)})</span>`;
+    const adjust = card.statAdjust || 0;
+    const val = card.status + (active ? card.seinenba : 0) + adjust;
+    const modified = adjust !== 0;
+    return `<span class="status ${active?'sein':''} ${modified?'adj':''}">${val}</span> <span style="opacity:0.5; font-size:10px;">(通常${card.status} / 正念場${fmtMod(card.seinenba)}${modified ? ` / 調整${fmtMod(adjust)}` : ""})</span>`;
   }
-  function cardHtml(card, onclickName, seat, editableCounter, dragSource, inlineEffect){
+  function cardHtml(card, onclickName, seat, editableCounter, dragSource, inlineEffect, statAdjustable){
     const counterRow = card.counterLabel ? `
       <div class="counter-row" onclick="event.stopPropagation();">
         <span>${escapeHtml(card.counterLabel)}: ${card.counter||0}</span>
@@ -1720,6 +1790,13 @@ function runApp(){
           <button onclick="event.stopPropagation(); adjustCounter('${card.id}',-1)">−</button>
           <button onclick="event.stopPropagation(); adjustCounter('${card.id}',1)">＋</button>
         ` : ""}
+      </div>
+    ` : "";
+    const statAdjustRow = (statAdjustable && editableCounter) ? `
+      <div class="stat-adjust-row" onclick="event.stopPropagation();">
+        <button onclick="event.stopPropagation(); adjustFieldStat('${card.id}',-100)">−100</button>
+        <button onclick="event.stopPropagation(); adjustFieldStat('${card.id}',100)">＋100</button>
+        ${card.statAdjust ? `<button class="reset" onclick="event.stopPropagation(); resetFieldStat('${card.id}')">戻す</button>` : ""}
       </div>
     ` : "";
     const effectParts = [];
@@ -1741,6 +1818,7 @@ function runApp(){
         </div>
         ${effectLines}
         ${counterRow}
+        ${statAdjustRow}
       </div>
     `;
   }
@@ -1825,7 +1903,7 @@ function runApp(){
       `;
     }).join("");
   }
-  function zonePickerGridHtml(mine, currentZone){
+  function zonePickerGridHtml(mine, currentZone, allowSwap){
     const colW = 78, gap = 8;
     return `
       <div class="zone-board-wrap">
@@ -1834,11 +1912,12 @@ function runApp(){
           ${ZONE_DEFS.map(z => {
             const isCurrent = z.key === currentZone;
             const occupied = !!mine.field[z.key] && !isCurrent;
+            const disabled = isCurrent || (occupied && !allowSwap);
             return `
               <div class="zone-slot" style="grid-column:${z.col}; grid-row:${z.row};">
                 <div class="zone-slot-label">${z.label}</div>
-                <button class="zone-pick-cell" data-zone="${z.key}" ${(occupied || isCurrent) ? "disabled" : ""}>
-                  ${isCurrent ? "現在の位置" : occupied ? escapeHtml(mine.field[z.key].name) : "選択"}
+                <button class="zone-pick-cell" data-zone="${z.key}" ${disabled ? "disabled" : ""}>
+                  ${isCurrent ? "現在の位置" : occupied ? (allowSwap ? `入れ替え: ${escapeHtml(mine.field[z.key].name)}` : escapeHtml(mine.field[z.key].name)) : "選択"}
                 </button>
               </div>
             `;
@@ -1862,12 +1941,12 @@ function runApp(){
               ondrop="onRevealDrop(event)"
             ` : ""}>
             <div class="zone-slot-label">公開</div>
-            ${revealCard ? cardHtml(revealCard, editable ? "returnRevealToHand" : "noop", seat, false) : `<div class="zone-empty">なし</div>`}
+            ${revealCard ? cardHtml(revealCard, editable ? "openRevealCardMenu" : "noop", seat, false) : `<div class="zone-empty">なし</div>`}
           </div>
           ${ZONE_DEFS.map(z => {
             const card = fieldObj[z.key];
             const inner = card
-              ? cardHtml(card, editable ? "openFieldCardMenu" : "noop", seat, editable, editable ? "field" : null)
+              ? cardHtml(card, editable ? "openFieldCardMenu" : "noop", seat, editable, editable ? "field" : null, false, true)
               : `<div class="zone-empty">空き</div>`;
             const dropAttrs = editable ? `
               ondragover="event.preventDefault();"
@@ -1987,7 +2066,7 @@ function runApp(){
             </div>
             <div class="actions">
               <button class="act" id="drawBtn" ${mine.deck.length===0?"disabled":""}>ドロー</button>
-              <button class="act" id="searchBtn" ${mine.deck.length===0?"disabled":""}>サーチ</button>
+              <button class="act" id="searchBtn" ${mine.deck.length===0?"disabled":""}>デッキカード移動</button>
               <button class="act" id="shuffleBtn" ${mine.deck.length===0?"disabled":""}>シャッフル</button>
               <button class="act" id="deckExcludeBtn" ${mine.deck.length===0?"disabled":""}>山札から除外</button>
               <button class="act" id="myDiscardBtn">墓地(${mine.discard.length})</button>
@@ -2031,7 +2110,7 @@ function runApp(){
     const endTurnBtnEl = document.getElementById("endTurnBtn");
     if(endTurnBtnEl) endTurnBtnEl.onclick = endTurn;
     const gameOverEndBtn = document.getElementById("gameOverEndBtn");
-    if(gameOverEndBtn) gameOverEndBtn.onclick = confirmEndGame;
+    if(gameOverEndBtn) gameOverEndBtn.onclick = doEndGame;
     const gameOverAgainBtn = document.getElementById("gameOverAgainBtn");
     if(gameOverAgainBtn) gameOverAgainBtn.onclick = playAgain;
     const endedBackBtn = document.getElementById("endedBackBtn");
@@ -2041,6 +2120,8 @@ function runApp(){
     window.openFieldCardMenu = openFieldCardMenu;
     window.openCommanderView = openCommanderView;
     window.adjustCounter = adjustCounter;
+    window.adjustFieldStat = adjustFieldStat;
+    window.resetFieldStat = resetFieldStat;
     window.adjustHp = adjustHp;
     window.adjustStack = adjustStack;
     window.noop = function(){};
@@ -2077,12 +2158,28 @@ function runApp(){
       `);
     }
     if(modal.type === "search"){
-      const cards = mine.deck.map(c => cardHtml(c, "pickFromSearch", mySeatKey, false)).join("");
+      const cards = mine.deck.map(c => cardHtml(c, "openSearchCardMenu", mySeatKey, false)).join("");
       return overlayWrap(`
-        <h3 class="display">山札からサーチ</h3>
-        <div class="hint">選んだ1枚を手札に加え、残りは自動でシャッフルされます。</div>
+        <h3 class="display">デッキカード移動</h3>
+        <div class="hint">カードをクリックすると、手札・墓地・場のどこに移動するか選べます。残りの山札は自動でシャッフルされます。</div>
         <div class="modal-cards">${cards || `<div class="empty-note">山札にカードがありません</div>`}</div>
         <button class="ghost" id="modalCancel">キャンセル</button>
+      `);
+    }
+    if(modal.type === "searchCardMenu"){
+      const card = mine.deck.find(c => c.id === modal.cardId);
+      if(!card){ modal = null; return ""; }
+      return overlayWrap(`
+        <h3 class="display">カード詳細</h3>${cardDetailBlock(card, mySeatKey, false)}
+        <div class="row" style="flex-wrap:wrap; margin-top:14px;">
+          <button class="act" id="mSearchToHand">手札に加える</button>
+          <button class="act" id="mSearchToDiscard">墓地に送る</button>
+          <button class="act" id="mSearchToField">緊急招来する</button>
+        </div>
+        <div style="margin-top:14px;" class="row">
+          <button class="ghost" id="mBackToSearchList">山札一覧に戻る</button>
+          <button class="ghost" id="modalCancel">キャンセル</button>
+        </div>
       `);
     }
     if(modal.type === "handCard"){
@@ -2120,14 +2217,15 @@ function runApp(){
       const card = source === "hand" ? mine.hand.find(c => c.id === modal.cardId)
         : source === "field" ? Object.values(mine.field).find(c => c && c.id === modal.cardId)
         : source === "discard" ? mine.discard.find(c => c.id === modal.cardId)
+        : source === "deck" ? mine.deck.find(c => c.id === modal.cardId)
         : mine.exclude.find(c => c.id === modal.cardId);
       if(!card){ modal = null; return ""; }
       const currentZone = source === "field" ? findFieldZone(mine.field, modal.cardId) : null;
       const titleVerb = source === "field" ? "どこに移動しますか？" : source === "hand" ? "どこに通常招来しますか？" : "どこに緊急招来しますか？";
       return overlayWrap(`
         <h3 class="display">『${escapeHtml(card.name)}』を${titleVerb}</h3>
-        <div class="hint">各ゾーンには1枚までしか置けません。空いているゾーンから選んでください。</div>
-        ${zonePickerGridHtml(mine, currentZone)}
+        <div class="hint">${source === "field" ? "空いているゾーンに移動、または他のカードがいるゾーンを選ぶと入れ替えられます。" : "各ゾーンには1枚までしか置けません。空いているゾーンから選んでください。"}</div>
+        ${zonePickerGridHtml(mine, currentZone, source === "field")}
         <button class="ghost" id="modalCancel" style="margin-top:10px;">キャンセル</button>
       `);
     }
@@ -2137,7 +2235,7 @@ function runApp(){
       if(!cmd){ modal = null; return ""; }
       return overlayWrap(`
         <h3 class="display">指揮官: ${escapeHtml(cmd.name)}</h3>
-        <div class="modal-detail-row">所属: ${escapeHtml(cmd.affiliation || "—")}</div>
+        <div class="modal-detail-row">肩書: ${escapeHtml(cmd.affiliation || "—")}</div>
         ${cmd.effect ? `<div class="modal-detail-row">${escapeHtml(cmd.effect)}</div>` : ""}
         <div style="margin-top:14px;"><button class="ghost" id="modalCancel">閉じる</button></div>
       `);
@@ -2208,6 +2306,18 @@ function runApp(){
         </div>
       `);
     }
+    if(modal.type === "revealCardMenu"){
+      const card = mine.revealSlot;
+      if(!card || card.id !== modal.cardId){ modal = null; return ""; }
+      return overlayWrap(`
+        <h3 class="display">カード詳細</h3>${cardDetailBlock(card, mySeatKey, false)}
+        <div class="row" style="flex-wrap:wrap; margin-top:14px;">
+          <button class="act" id="mRevealToHand">手札に戻す</button>
+          <button class="act" id="mRevealToDiscard">墓地に送る</button>
+        </div>
+        <div style="margin-top:14px;"><button class="ghost" id="modalCancel">閉じる</button></div>
+      `);
+    }
     return "";
   }
 
@@ -2246,26 +2356,37 @@ function runApp(){
     if(c("mExcludeToDeck")) c("mExcludeToDeck").onclick = () => returnExcludeToDeckTop(modal.cardId);
     if(c("mExcludeToField")) c("mExcludeToField").onclick = () => openChooseZone(modal.cardId, "exclude");
     if(c("mExcludeToDiscard")) c("mExcludeToDiscard").onclick = () => returnExcludeToDiscard(modal.cardId);
+    if(c("mRevealToHand")) c("mRevealToHand").onclick = () => returnRevealToHand(modal.cardId);
+    if(c("mRevealToDiscard")) c("mRevealToDiscard").onclick = () => sendRevealToDiscard(modal.cardId);
     if(c("mBackToExcludeList")) c("mBackToExcludeList").onclick = () => { modal = { type: "peekExclude", seat: mySeat }; render(); };
+    if(c("mSearchToHand")) c("mSearchToHand").onclick = () => pickFromSearch(modal.cardId);
+    if(c("mSearchToDiscard")) c("mSearchToDiscard").onclick = () => sendSearchToDiscard(modal.cardId);
+    if(c("mSearchToField")) c("mSearchToField").onclick = () => openChooseZone(modal.cardId, "deck");
+    if(c("mBackToSearchList")) c("mBackToSearchList").onclick = () => { modal = { type: "search" }; render(); };
     document.querySelectorAll("[data-zone]").forEach(el => {
       el.onclick = () => {
         const zoneKey = el.getAttribute("data-zone");
         if(modal.source === "field") moveFieldToZone(modal.cardId, zoneKey);
         else if(modal.source === "discard") playFromDiscardToZone(modal.cardId, zoneKey);
         else if(modal.source === "exclude") playFromExcludeToZone(modal.cardId, zoneKey);
+        else if(modal.source === "deck") playFromDeckToZone(modal.cardId, zoneKey);
         else playToZone(modal.cardId, zoneKey);
       };
     });
   }
 
   window.pickFromSearch = pickFromSearch;
+  window.openSearchCardMenu = openSearchCardMenu;
   window.pickFromDiscard = pickFromDiscard;
   window.openDiscardCardMenu = openDiscardCardMenu;
   window.excludeFromDeck = excludeFromDeck;
   window.returnRevealToHand = returnRevealToHand;
   window.openExcludeCardMenu = openExcludeCardMenu;
+  window.openRevealCardMenu = openRevealCardMenu;
   window.openCommanderView = openCommanderView;
   window.adjustCounter = adjustCounter;
+  window.adjustFieldStat = adjustFieldStat;
+  window.resetFieldStat = resetFieldStat;
   window.adjustHp = adjustHp;
   window.adjustStack = adjustStack;
   window.noop = function(){};
