@@ -1396,7 +1396,7 @@ function runApp(){
         <h3 class="display">ターン開始からの流れ</h3>
         <ul class="rules-list">
           <li><b>ドローフェーズ</b>:自動で行われる。そのターンが平場か正念場か決定される。正念場の場合、決死値に応じて偉人のステータスが増減する。</li>
-          <li><b>移動・招来フェーズ</b>:偉人を招来する前であればサブゾーンから接続されたメインゾーンに移動できる。移動と招来(通常招来・緊急招来を合わせて)は1ターン合計2回まで。メインゾーンへの通常招来は1ターン1回まで。</li>
+          <li><b>移動・招来フェーズ</b>:偉人を招来する前であればサブゾーンから接続されたメインゾーンに移動、または他の偉人がいるゾーンと入れ替えることができる。移動・入れ替え・招来(通常招来・緊急招来を合わせて)は1ターン合計2回まで。メインゾーンへの通常招来は1ターン1回まで。</li>
           <li><b>戦闘フェーズ</b>:相手メインゾーンに存在する偉人を攻撃できる。相手メインゾーンに偉人が存在しない場合、相手に直接攻撃できる。</li>
           <li><b>エンドフェーズ</b>:ターン終了を押すと相手にターンが移動する。</li>
         </ul>
@@ -1881,7 +1881,7 @@ function runApp(){
     const adjust = card.statAdjust || 0;
     const val = card.status + (active ? card.seinenba : 0) + adjust;
     const adjClass = adjust > 0 ? "adj-up" : adjust < 0 ? "adj-down" : "";
-    return `<span class="status ${active?'sein':''} ${adjClass}">${val}</span> <span style="opacity:0.5; font-size:10px;">(通常${card.status} / 正念場${fmtMod(card.seinenba)}${adjust !== 0 ? ` / 調整${fmtMod(adjust)}` : ""})</span>`;
+    return `<span class="status ${active?'sein':''} ${adjClass}">${val}</span> <span style="opacity:0.5; font-size:10px;">(攻撃力${card.status} / 正念場${fmtMod(card.seinenba)}${adjust !== 0 ? ` / 調整${fmtMod(adjust)}` : ""})</span>`;
   }
   function cardHtml(card, onclickName, seat, editableCounter, dragSource, inlineEffect, statAdjustable){
     const counterRow = card.counterLabel ? `
