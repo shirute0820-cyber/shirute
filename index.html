@@ -194,6 +194,11 @@
   .counter-row{ display:flex; align-items:center; gap:5px; font-size:10.5px; margin-top:3px; padding-top:3px; border-top:1px dashed rgba(0,0,0,0.12); color: var(--ink); font-weight:600; }
   .counter-row button{ width:17px; height:17px; line-height:15px; padding:0; font-size:12px; border-radius:3px; border:1px solid rgba(0,0,0,0.2); background:#efe9da; cursor:pointer; }
   .counter-row button:hover{ background:#e2d9c2; }
+  .status.adj{ color: #1d6e5c; }
+  .stat-adjust-row{ display:flex; align-items:center; gap:4px; margin-top:3px; padding-top:3px; border-top:1px dashed rgba(0,0,0,0.12); flex-wrap:wrap; }
+  .stat-adjust-row button{ font-size:9.5px; padding:2px 5px; border-radius:3px; border:1px solid rgba(0,0,0,0.2); background:#efe9da; color:var(--ink); cursor:pointer; }
+  .stat-adjust-row button:hover{ background:#e2d9c2; }
+  .stat-adjust-row button.reset{ background: rgba(29,110,92,0.15); border-color:#1d6e5c; color:#1d6e5c; font-weight:700; }
   .card.back{
     width: 52px; min-width:52px; height: 74px; min-height:0; padding:0;
     background: repeating-linear-gradient(45deg, var(--seat-b), var(--seat-b) 6px, #2e5f5a 6px, #2e5f5a 12px);
@@ -669,7 +674,7 @@ function runApp(){
     if(!preset){ errorMsg = "デッキの読み込みに失敗しました。"; render(); return; }
     const s = defaultSeatState();
     s.commander = { affiliation: preset.commander.affiliation, name: preset.commander.name, effect: preset.commander.effect };
-    s.deck = preset.cards.map(c => ({ ...c, id: uid(), counter: 0 }));
+    s.deck = preset.cards.map(c => ({ ...c, id: uid(), counter: 0, statAdjust: 0 }));
     s.stackLabel = preset.stackLabel || "";
     s.stack = 0;
     s.submitted = true;
@@ -732,6 +737,26 @@ function runApp(){
     const card = s.hand.find(c => c.id === cardId) || Object.values(s.field).find(c => c && c.id === cardId) || s.discard.find(c => c.id === cardId);
     if(!card) return;
     card.counter = Math.max(0, (card.counter || 0) + delta);
+    await saveSeat(mySeat, s); render();
+  }
+  async function adjustFieldStat(cardId, delta){
+    const s = state[mySeat];
+    const zoneKey = findFieldZone(s.field, cardId);
+    if(!zoneKey) return;
+    const card = s.field[zoneKey];
+    let next = (card.statAdjust || 0) + delta;
+    if(card.status + next < 0) next = -card.status; // 合計が0未満にならないようにする
+    card.statAdjust = next;
+    addLog(s, `『${card.name}』のステータスを${delta > 0 ? "+" : ""}${delta}調整した(現在${fmtMod(card.statAdjust)})`);
+    await saveSeat(mySeat, s); render();
+  }
+  async function resetFieldStat(cardId){
+    const s = state[mySeat];
+    const zoneKey = findFieldZone(s.field, cardId);
+    if(!zoneKey) return;
+    const card = s.field[zoneKey];
+    card.statAdjust = 0;
+    addLog(s, `『${card.name}』のステータス調整を元に戻した`);
     await saveSeat(mySeat, s); render();
   }
   async function adjustHp(delta){
@@ -835,6 +860,7 @@ function runApp(){
     const zoneKey = findFieldZone(s.field, cardId);
     if(!zoneKey) return;
     const card = s.field[zoneKey];
+    card.statAdjust = 0;
     s.field[zoneKey] = null;
     s.hand.push(card);
     addLog(s, `『${card.name}』を場から手札に戻した`);
@@ -846,6 +872,7 @@ function runApp(){
     const zoneKey = findFieldZone(s.field, cardId);
     if(!zoneKey) return;
     const card = s.field[zoneKey];
+    card.statAdjust = 0;
     s.field[zoneKey] = null;
     s.discard.push(card);
     addLog(s, `『${card.name}』を場から墓地に送った`);
@@ -902,6 +929,7 @@ function runApp(){
     const zoneKey = findFieldZone(s.field, cardId);
     if(!zoneKey) return;
     const card = s.field[zoneKey];
+    card.statAdjust = 0;
     s.field[zoneKey] = null;
     s.exclude.push(card);
     addLog(s, `『${card.name}』を場から除外した`);
@@ -1438,7 +1466,7 @@ function runApp(){
 
         <h3 class="display" style="margin-top:22px;">① 指揮官カード(1枚・デッキとは別枠)</h3>
         <div class="grid2 field-row">
-          <div><label class="small-label">所属</label><input type="text" id="cmdAff" value="${escapeHtml(c.affiliation)}" placeholder="例: 海賊"></div>
+          <div><label class="small-label">肩書</label><input type="text" id="cmdAff" value="${escapeHtml(c.affiliation)}" placeholder="例: 海賊"></div>
           <div><label class="small-label">名前</label><input type="text" id="cmdName" value="${escapeHtml(c.name)}" placeholder="例: フランシス・ドレーク"></div>
         </div>
         <div class="field-row"><label class="small-label">効果</label><textarea id="cmdEffect" style="min-height:70px;" placeholder="指揮官の効果テキスト">${escapeHtml(c.effect)}</textarea></div>
@@ -1464,7 +1492,7 @@ function runApp(){
             <div><label class="small-label">正念場の修正値</label><input type="number" id="fSeinenba" value="${escapeHtml(f.seinenba)}" placeholder="600 または -400"></div>
           </div>
           <div class="grid2 field-row">
-            <div><label class="small-label">所属</label><input type="text" id="fAffiliation" value="${escapeHtml(f.affiliation)}" placeholder="例: 海賊"></div>
+            <div><label class="small-label">肩書</label><input type="text" id="fAffiliation" value="${escapeHtml(f.affiliation)}" placeholder="例: 海賊"></div>
             <div><label class="small-label">名前</label><input type="text" id="fName" value="${escapeHtml(f.name)}" placeholder="カード名"></div>
           </div>
           <div class="grid2 field-row">
@@ -1480,7 +1508,7 @@ function runApp(){
           <div class="built-list">${builtListHtml}</div>
         ` : `
           <div class="field-row">
-            <label class="small-label">1行1枚、「属性|名前|所属|ステータス|正念場修正値|効果①|効果②|カウンター名|枚数」の順で入力(効果・カウンター名・枚数は省略可)</label>
+            <label class="small-label">1行1枚、「属性|名前|肩書|ステータス|正念場修正値|効果①|効果②|カウンター名|枚数」の順で入力(効果・カウンター名・枚数は省略可)</label>
             <textarea id="bulkInput" style="min-height:220px;">${escapeHtml(draft.bulkText)}</textarea>
           </div>
           <div class="hint">正念場修正値がマイナスの場合はそのまま「-400」のように入力してください。枚数を省略すると1枚として扱われます。</div>
@@ -1699,7 +1727,7 @@ function runApp(){
       if(!cmd){ modal = null; return ""; }
       return overlayWrap(`
         <h3 class="display">指揮官: ${escapeHtml(cmd.name)}</h3>
-        <div class="modal-detail-row">所属: ${escapeHtml(cmd.affiliation || "—")}</div>
+        <div class="modal-detail-row">肩書: ${escapeHtml(cmd.affiliation || "—")}</div>
         ${cmd.effect ? `<div class="modal-detail-row">${escapeHtml(cmd.effect)}</div>` : ""}
         <div style="margin-top:14px;"><button class="ghost" id="modalCancel">閉じる</button></div>
       `);
@@ -1709,10 +1737,12 @@ function runApp(){
 
   function statusHtml(card){
     const active = sharedState.turnState === "seinenba";
-    const val = active ? (card.status + card.seinenba) : card.status;
-    return `<span class="status ${active?'sein':''}">${val}</span> <span style="opacity:0.5; font-size:10px;">(通常${card.status} / 正念場${fmtMod(card.seinenba)})</span>`;
+    const adjust = card.statAdjust || 0;
+    const val = card.status + (active ? card.seinenba : 0) + adjust;
+    const modified = adjust !== 0;
+    return `<span class="status ${active?'sein':''} ${modified?'adj':''}">${val}</span> <span style="opacity:0.5; font-size:10px;">(通常${card.status} / 正念場${fmtMod(card.seinenba)}${modified ? ` / 調整${fmtMod(adjust)}` : ""})</span>`;
   }
-  function cardHtml(card, onclickName, seat, editableCounter, dragSource, inlineEffect){
+  function cardHtml(card, onclickName, seat, editableCounter, dragSource, inlineEffect, statAdjustable){
     const counterRow = card.counterLabel ? `
       <div class="counter-row" onclick="event.stopPropagation();">
         <span>${escapeHtml(card.counterLabel)}: ${card.counter||0}</span>
@@ -1720,6 +1750,13 @@ function runApp(){
           <button onclick="event.stopPropagation(); adjustCounter('${card.id}',-1)">−</button>
           <button onclick="event.stopPropagation(); adjustCounter('${card.id}',1)">＋</button>
         ` : ""}
+      </div>
+    ` : "";
+    const statAdjustRow = (statAdjustable && editableCounter) ? `
+      <div class="stat-adjust-row" onclick="event.stopPropagation();">
+        <button onclick="event.stopPropagation(); adjustFieldStat('${card.id}',-100)">−100</button>
+        <button onclick="event.stopPropagation(); adjustFieldStat('${card.id}',100)">＋100</button>
+        ${card.statAdjust ? `<button class="reset" onclick="event.stopPropagation(); resetFieldStat('${card.id}')">戻す</button>` : ""}
       </div>
     ` : "";
     const effectParts = [];
@@ -1741,6 +1778,7 @@ function runApp(){
         </div>
         ${effectLines}
         ${counterRow}
+        ${statAdjustRow}
       </div>
     `;
   }
@@ -1867,7 +1905,7 @@ function runApp(){
           ${ZONE_DEFS.map(z => {
             const card = fieldObj[z.key];
             const inner = card
-              ? cardHtml(card, editable ? "openFieldCardMenu" : "noop", seat, editable, editable ? "field" : null)
+              ? cardHtml(card, editable ? "openFieldCardMenu" : "noop", seat, editable, editable ? "field" : null, false, true)
               : `<div class="zone-empty">空き</div>`;
             const dropAttrs = editable ? `
               ondragover="event.preventDefault();"
@@ -2041,6 +2079,8 @@ function runApp(){
     window.openFieldCardMenu = openFieldCardMenu;
     window.openCommanderView = openCommanderView;
     window.adjustCounter = adjustCounter;
+    window.adjustFieldStat = adjustFieldStat;
+    window.resetFieldStat = resetFieldStat;
     window.adjustHp = adjustHp;
     window.adjustStack = adjustStack;
     window.noop = function(){};
@@ -2137,7 +2177,7 @@ function runApp(){
       if(!cmd){ modal = null; return ""; }
       return overlayWrap(`
         <h3 class="display">指揮官: ${escapeHtml(cmd.name)}</h3>
-        <div class="modal-detail-row">所属: ${escapeHtml(cmd.affiliation || "—")}</div>
+        <div class="modal-detail-row">肩書: ${escapeHtml(cmd.affiliation || "—")}</div>
         ${cmd.effect ? `<div class="modal-detail-row">${escapeHtml(cmd.effect)}</div>` : ""}
         <div style="margin-top:14px;"><button class="ghost" id="modalCancel">閉じる</button></div>
       `);
@@ -2266,6 +2306,8 @@ function runApp(){
   window.openExcludeCardMenu = openExcludeCardMenu;
   window.openCommanderView = openCommanderView;
   window.adjustCounter = adjustCounter;
+  window.adjustFieldStat = adjustFieldStat;
+  window.resetFieldStat = resetFieldStat;
   window.adjustHp = adjustHp;
   window.adjustStack = adjustStack;
   window.noop = function(){};
