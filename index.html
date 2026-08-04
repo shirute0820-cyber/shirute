@@ -1050,11 +1050,25 @@ function runApp(){
   function mulliganOverlayHtml(mine){
     const cardsHtml = mine.hand.map(c => {
       const selected = mulliganSelected.indexOf(c.id) !== -1;
+      const effectParts = [];
+      if(c.effect1) effectParts.push("①" + c.effect1);
+      if(c.effect2) effectParts.push("②" + c.effect2);
+      const effectIcon = effectParts.length ? `
+        <span class="effect-icon" data-effect="${escapeHtml(effectParts.join("\n"))}"
+          onmouseenter="showEffectTip(event)" onmouseleave="hideEffectTip()" onclick="event.stopPropagation();">効果</span>
+      ` : "";
+      const counterRow = c.counterLabel ? `
+        <div class="counter-row" onclick="event.stopPropagation();"><span>${escapeHtml(c.counterLabel)}: ${c.counter||0}</span></div>
+      ` : "";
       return `
         <div class="card${selected ? ' mulligan-selected' : ''}" onclick="toggleMulliganCard('${c.id}')">
           <div class="toprow"><span class="swatch" style="background:${colorSwatch(c.color)};"></span>${statusHtml(c)}</div>
           <div class="cname">${escapeHtml(c.name)}</div>
-          <div class="caff">${escapeHtml(c.affiliation || "")}</div>
+          <div class="caff-row">
+            <span class="caff">${escapeHtml(c.affiliation || "")}</span>
+            ${effectIcon}
+          </div>
+          ${counterRow}
           ${selected ? `<div class="mulligan-tag">戻す</div>` : ""}
         </div>
       `;
@@ -1093,7 +1107,7 @@ function runApp(){
       await saveSeat(nextSeat, copy);
       state[nextSeat] = copy;
     }
-    await saveShared({ turnState: hit ? "seinenba" : "normal", currentTurn: nextSeat, turnNumber: newTurnNumber, gameInitialized: true });
+    await saveShared({ ...sharedState, turnState: hit ? "seinenba" : "normal", currentTurn: nextSeat, turnNumber: newTurnNumber, gameInitialized: true });
     const s = state[mySeat];
     addLog(s, "ターンを終了した");
     await saveSeat(mySeat, s); render();
