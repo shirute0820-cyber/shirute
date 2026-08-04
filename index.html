@@ -692,6 +692,11 @@ function runApp(){
     mulliganSelected = [];
     addLog(s, "デッキをシャッフルしてゲームを開始した");
     await saveSeat(mySeat, s);
+    if(sharedState.ended){
+      const newShared = { ...sharedState, ended: false };
+      sharedState = newShared;
+      await saveShared(newShared);
+    }
     screen = "game"; render();
   }
   async function redoDeckSelection(){
@@ -879,8 +884,9 @@ function runApp(){
     const idx = s.hand.findIndex(c => c.id === cardId);
     if(idx === -1) return;
     const [card] = s.hand.splice(idx, 1);
-    s.deck.unshift(card);
-    addLog(s, "手札のカードを山札の一番上に戻した");
+    s.deck.push(card);
+    s.deck = shuffle(s.deck);
+    addLog(s, "手札のカードを山札にランダムな位置で戻した");
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -908,6 +914,19 @@ function runApp(){
     modal = null;
     await saveSeat(mySeat, s); render();
   }
+  async function returnFieldToDeck(cardId){
+    const s = state[mySeat];
+    const zoneKey = findFieldZone(s.field, cardId);
+    if(!zoneKey) return;
+    const card = s.field[zoneKey];
+    card.statAdjust = 0;
+    s.field[zoneKey] = null;
+    s.deck.push(card);
+    s.deck = shuffle(s.deck);
+    addLog(s, `『${card.name}』を場から山札にランダムな位置で戻した`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
   function openDiscardPeek(seat){ modal = { type:"peekDiscard", seat }; render(); }
   function openDiscardCardMenu(cardId){ modal = { type:"discardCardMenu", cardId }; render(); }
   async function pickFromDiscard(cardId){
@@ -925,8 +944,9 @@ function runApp(){
     const idx = s.discard.findIndex(c => c.id === cardId);
     if(idx === -1) return;
     const [card] = s.discard.splice(idx, 1);
-    s.deck.unshift(card);
-    addLog(s, `墓地から『${card.name}』を山札の一番上に戻した`);
+    s.deck.push(card);
+    s.deck = shuffle(s.deck);
+    addLog(s, `墓地から『${card.name}』を山札にランダムな位置で戻した`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -1004,8 +1024,9 @@ function runApp(){
     const idx = s.exclude.findIndex(c => c.id === cardId);
     if(idx === -1) return;
     const [card] = s.exclude.splice(idx, 1);
-    s.deck.unshift(card);
-    addLog(s, `除外から『${card.name}』を山札の一番上に戻した`);
+    s.deck.push(card);
+    s.deck = shuffle(s.deck);
+    addLog(s, `除外から『${card.name}』を山札にランダムな位置で戻した`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -1052,13 +1073,17 @@ function runApp(){
       const aCopy = { ...a, deck: [...a.deck], hand: [...a.hand], log: [...(a.log||[])] };
       for(let i=0;i<6;i++){ if(aCopy.deck.length) aCopy.hand.push(aCopy.deck.shift()); }
       addLog(aCopy, "初期手札6枚をドローした");
-      await saveSeat("A", aCopy);
       const bCopy = { ...b, deck: [...b.deck], hand: [...b.hand], log: [...(b.log||[])] };
       for(let i=0;i<6;i++){ if(bCopy.deck.length) bCopy.hand.push(bCopy.deck.shift()); }
       addLog(bCopy, "初期手札6枚をドローした");
-      await saveSeat("B", bCopy);
-      await saveShared({ turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false, dealt: true, firstPlayer: first, ended: false });
+      const newShared = { turnState: "normal", currentTurn: null, turnNumber: 0, gameInitialized: false, dealt: true, firstPlayer: first, ended: false };
+      // Firebaseへの反映(往復)を待つ間に同じ処理が再実行されるのを防ぐため、
+      // ローカルの状態を書き込み前に先に確定させておく。
+      sharedState = newShared;
       state.A = aCopy; state.B = bCopy;
+      await saveSeat("A", aCopy);
+      await saveSeat("B", bCopy);
+      await saveShared(newShared);
       render();
     } finally {
       gameInitInProgress = false;
@@ -1073,7 +1098,9 @@ function runApp(){
     gameInitInProgress = true;
     try{
       const hit = Math.floor(Math.random()*3) === 0;
-      await saveShared({ turnState: hit ? "seinenba" : "normal", currentTurn: sharedState.firstPlayer || "A", turnNumber: 1, gameInitialized: true, dealt: true, firstPlayer: sharedState.firstPlayer || "A", ended: false });
+      const newShared = { turnState: hit ? "seinenba" : "normal", currentTurn: sharedState.firstPlayer || "A", turnNumber: 1, gameInitialized: true, dealt: true, firstPlayer: sharedState.firstPlayer || "A", ended: false };
+      sharedState = newShared;
+      await saveShared(newShared);
       render();
     } finally {
       gameInitInProgress = false;
@@ -1141,6 +1168,9 @@ function runApp(){
             <button class="ghost" id="mulliganSkipBtn">マリガンしない</button>
             <button class="primary" id="mulliganConfirmBtn" ${mulliganSelected.length===0?"disabled":""}>選んだカードを戻して引き直す</button>
           </div>
+          <div class="row" style="justify-content:center; margin-top:10px;">
+            <button class="ghost" id="mulliganEndGameBtn" style="color:#e2a08a; font-size:12px;">ゲームを終了する</button>
+          </div>
         </div>
       </div>
     `;
@@ -1162,10 +1192,12 @@ function runApp(){
         copy.hp = 0;
         addLog(copy, `ターン${newTurnNumber}開始時に山札が0枚でドローできず、敗北した`);
       }
-      await saveSeat(nextSeat, copy);
       state[nextSeat] = copy;
+      await saveSeat(nextSeat, copy);
     }
-    await saveShared({ ...sharedState, turnState: hit ? "seinenba" : "normal", currentTurn: nextSeat, turnNumber: newTurnNumber, gameInitialized: true });
+    const newShared = { ...sharedState, turnState: hit ? "seinenba" : "normal", currentTurn: nextSeat, turnNumber: newTurnNumber, gameInitialized: true };
+    sharedState = newShared;
+    await saveShared(newShared);
     const s = state[mySeat];
     addLog(s, "ターンを終了した");
     await saveSeat(mySeat, s); render();
@@ -1209,6 +1241,38 @@ function runApp(){
     s.revealSlot = null;
     s.discard.push(card);
     addLog(s, `公開していた『${card.name}』を墓地に送った`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  async function sendRevealToDeck(cardId){
+    const s = state[mySeat];
+    if(!s.revealSlot || s.revealSlot.id !== cardId) return;
+    const card = s.revealSlot;
+    s.revealSlot = null;
+    s.deck.push(card);
+    s.deck = shuffle(s.deck);
+    addLog(s, `公開していた『${card.name}』を山札にランダムな位置で戻した`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  async function sendRevealToExclude(cardId){
+    const s = state[mySeat];
+    if(!s.revealSlot || s.revealSlot.id !== cardId) return;
+    const card = s.revealSlot;
+    s.revealSlot = null;
+    s.exclude.push(card);
+    addLog(s, `公開していた『${card.name}』を除外した`);
+    modal = null;
+    await saveSeat(mySeat, s); render();
+  }
+  async function playFromRevealToZone(cardId, zoneKey){
+    const s = state[mySeat];
+    if(s.field[zoneKey]) return;
+    if(!s.revealSlot || s.revealSlot.id !== cardId) return;
+    const card = s.revealSlot;
+    s.revealSlot = null;
+    s.field[zoneKey] = card;
+    addLog(s, `公開していた『${card.name}』を${ZONE_LABEL[zoneKey]}に緊急招来した`);
     modal = null;
     await saveSeat(mySeat, s); render();
   }
@@ -2099,6 +2163,8 @@ function runApp(){
     if(mulliganSkipBtn) mulliganSkipBtn.onclick = () => confirmMulligan(false);
     const mulliganConfirmBtn = document.getElementById("mulliganConfirmBtn");
     if(mulliganConfirmBtn) mulliganConfirmBtn.onclick = () => confirmMulligan(true);
+    const mulliganEndGameBtn = document.getElementById("mulliganEndGameBtn");
+    if(mulliganEndGameBtn) mulliganEndGameBtn.onclick = doEndGame;
     document.getElementById("drawBtn").onclick = drawCard;
     document.getElementById("searchBtn").onclick = openSearch;
     document.getElementById("shuffleBtn").onclick = manualShuffle;
@@ -2176,6 +2242,7 @@ function runApp(){
           <button class="act" id="mSearchToHand">手札に加える</button>
           <button class="act" id="mSearchToDiscard">墓地に送る</button>
           <button class="act" id="mSearchToField">緊急招来する</button>
+          <button class="act" id="mSearchToExclude" style="color:#e2a08a;">除外する</button>
         </div>
         <div style="margin-top:14px;" class="row">
           <button class="ghost" id="mBackToSearchList">山札一覧に戻る</button>
@@ -2191,7 +2258,7 @@ function runApp(){
         <div class="row" style="flex-wrap:wrap; margin-top:14px;">
           <button class="act" id="mPlay">通常招来する</button>
           <button class="act" id="mDiscard">墓地に送る</button>
-          <button class="act" id="mReturn">山札の一番上に戻す</button>
+          <button class="act" id="mReturn">山札に戻す</button>
           <button class="act" id="mReveal">相手に見せる(公開)</button>
           <button class="act" id="mExcludeHand" style="color:#e2a08a;">除外する</button>
         </div>
@@ -2208,6 +2275,7 @@ function runApp(){
           <button class="act" id="mMoveZone">他のゾーンに移動</button>
           <button class="act" id="mReturnHand">手札に戻す</button>
           <button class="act" id="mDiscardField">墓地に送る</button>
+          <button class="act" id="mReturnFieldDeck">山札に戻す</button>
           <button class="act" id="mExcludeField" style="color:#e2a08a;">除外する</button>
         </div>
         <div style="margin-top:14px;"><button class="ghost" id="modalCancel">キャンセル</button></div>
@@ -2219,6 +2287,7 @@ function runApp(){
         : source === "field" ? Object.values(mine.field).find(c => c && c.id === modal.cardId)
         : source === "discard" ? mine.discard.find(c => c.id === modal.cardId)
         : source === "deck" ? mine.deck.find(c => c.id === modal.cardId)
+        : source === "reveal" ? mine.revealSlot
         : mine.exclude.find(c => c.id === modal.cardId);
       if(!card){ modal = null; return ""; }
       const currentZone = source === "field" ? findFieldZone(mine.field, modal.cardId) : null;
@@ -2314,7 +2383,10 @@ function runApp(){
         <h3 class="display">カード詳細</h3>${cardDetailBlock(card, mySeatKey, false)}
         <div class="row" style="flex-wrap:wrap; margin-top:14px;">
           <button class="act" id="mRevealToHand">手札に戻す</button>
+          <button class="act" id="mRevealToField">緊急招来する</button>
+          <button class="act" id="mRevealToDeck">山札に戻す</button>
           <button class="act" id="mRevealToDiscard">墓地に送る</button>
+          <button class="act" id="mRevealToExclude" style="color:#e2a08a;">除外する</button>
         </div>
         <div style="margin-top:14px;"><button class="ghost" id="modalCancel">閉じる</button></div>
       `);
@@ -2345,6 +2417,7 @@ function runApp(){
     if(c("mReturn")) c("mReturn").onclick = () => returnToDeckTop(modal.cardId);
     if(c("mReturnHand")) c("mReturnHand").onclick = () => returnFieldToHand(modal.cardId);
     if(c("mDiscardField")) c("mDiscardField").onclick = () => discardFromField(modal.cardId);
+    if(c("mReturnFieldDeck")) c("mReturnFieldDeck").onclick = () => returnFieldToDeck(modal.cardId);
     if(c("mExcludeHand")) c("mExcludeHand").onclick = () => excludeFromHand(modal.cardId);
     if(c("mReveal")) c("mReveal").onclick = () => revealFromHand(modal.cardId);
     if(c("mExcludeField")) c("mExcludeField").onclick = () => excludeFromField(modal.cardId);
@@ -2359,10 +2432,14 @@ function runApp(){
     if(c("mExcludeToDiscard")) c("mExcludeToDiscard").onclick = () => returnExcludeToDiscard(modal.cardId);
     if(c("mRevealToHand")) c("mRevealToHand").onclick = () => returnRevealToHand(modal.cardId);
     if(c("mRevealToDiscard")) c("mRevealToDiscard").onclick = () => sendRevealToDiscard(modal.cardId);
+    if(c("mRevealToField")) c("mRevealToField").onclick = () => openChooseZone(modal.cardId, "reveal");
+    if(c("mRevealToDeck")) c("mRevealToDeck").onclick = () => sendRevealToDeck(modal.cardId);
+    if(c("mRevealToExclude")) c("mRevealToExclude").onclick = () => sendRevealToExclude(modal.cardId);
     if(c("mBackToExcludeList")) c("mBackToExcludeList").onclick = () => { modal = { type: "peekExclude", seat: mySeat }; render(); };
     if(c("mSearchToHand")) c("mSearchToHand").onclick = () => pickFromSearch(modal.cardId);
     if(c("mSearchToDiscard")) c("mSearchToDiscard").onclick = () => sendSearchToDiscard(modal.cardId);
     if(c("mSearchToField")) c("mSearchToField").onclick = () => openChooseZone(modal.cardId, "deck");
+    if(c("mSearchToExclude")) c("mSearchToExclude").onclick = () => excludeFromDeck(modal.cardId);
     if(c("mBackToSearchList")) c("mBackToSearchList").onclick = () => { modal = { type: "search" }; render(); };
     document.querySelectorAll("[data-zone]").forEach(el => {
       el.onclick = () => {
@@ -2371,6 +2448,7 @@ function runApp(){
         else if(modal.source === "discard") playFromDiscardToZone(modal.cardId, zoneKey);
         else if(modal.source === "exclude") playFromExcludeToZone(modal.cardId, zoneKey);
         else if(modal.source === "deck") playFromDeckToZone(modal.cardId, zoneKey);
+        else if(modal.source === "reveal") playFromRevealToZone(modal.cardId, zoneKey);
         else playToZone(modal.cardId, zoneKey);
       };
     });
