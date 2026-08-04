@@ -185,6 +185,9 @@
     border:1px solid rgba(0,0,0,0.25); border-radius:9px; padding:1px 6px; cursor:help;
     background: rgba(0,0,0,0.05);
   }
+  .turn-limit-badge{
+    font-size:9.5px; font-weight:700; color:#6b3fa0; margin-top:2px;
+  }
   .card-tooltip{
     display:none; position:fixed; z-index:200; max-width:220px;
     background:#1c1710; color:#f6f1e4; padding:9px 11px; border-radius:7px;
@@ -317,7 +320,7 @@ function runApp(){
       commander: { affiliation:"", name:"", effect:"" },
       stackLabel: "",
       cards: [],
-      formCard: { color:"", name:"", affiliation:"", status:"", seinenba:"", effect1:"", effect2:"", counterLabel:"", qty:"1" },
+      formCard: { color:"", name:"", affiliation:"", status:"", seinenba:"", effect1:"", effect2:"", counterLabel:"", turnLimit:"", qty:"1" },
       bulkText: ""
     };
   }
@@ -515,13 +518,14 @@ function runApp(){
   // ---------------- deck builder helpers ----------------
   let editingCardGroupSig = null;
   function cardSignature(c){
-    return [c.color,c.name,c.affiliation,c.status,c.seinenba,c.effect1,c.effect2,c.counterLabel||""].join("\u0001");
+    return [c.color,c.name,c.affiliation,c.status,c.seinenba,c.effect1,c.effect2,c.counterLabel||"",c.turnLimit||""].join("\u0001");
   }
   function addDraftCard(){
     const f = draft.formCard;
     if(!f.name.trim()){ errorMsg = "カード名を入力してください。"; render(); return; }
     const statusNum = parseInt(f.status, 10);
     const seinenbaNum = parseInt(f.seinenba, 10);
+    const turnLimitNum = parseInt(f.turnLimit, 10);
     let qty = parseInt(f.qty, 10);
     if(isNaN(qty) || qty < 1) qty = 1;
     if(editingCardGroupSig){
@@ -532,10 +536,11 @@ function runApp(){
       draft.cards.push({
         id: uid(), color: f.color.trim(), name: f.name.trim(), affiliation: f.affiliation.trim(),
         status: isNaN(statusNum) ? 0 : statusNum, seinenba: isNaN(seinenbaNum) ? 0 : seinenbaNum,
-        effect1: f.effect1.trim(), effect2: f.effect2.trim(), counterLabel: f.counterLabel.trim()
+        effect1: f.effect1.trim(), effect2: f.effect2.trim(), counterLabel: f.counterLabel.trim(),
+        turnLimit: isNaN(turnLimitNum) ? null : turnLimitNum
       });
     }
-    draft.formCard = { color:f.color, name:"", affiliation:f.affiliation, status:"", seinenba:"", effect1:"", effect2:"", counterLabel:f.counterLabel, qty:"1" };
+    draft.formCard = { color:f.color, name:"", affiliation:f.affiliation, status:"", seinenba:"", effect1:"", effect2:"", counterLabel:f.counterLabel, turnLimit:"", qty:"1" };
     errorMsg = ""; render();
   }
   function startEditCardGroup(signature){
@@ -546,7 +551,7 @@ function runApp(){
       color: sample.color || "", name: sample.name || "", affiliation: sample.affiliation || "",
       status: String(sample.status ?? ""), seinenba: String(sample.seinenba ?? ""),
       effect1: sample.effect1 || "", effect2: sample.effect2 || "",
-      counterLabel: sample.counterLabel || "", qty: String(count)
+      counterLabel: sample.counterLabel || "", turnLimit: sample.turnLimit != null ? String(sample.turnLimit) : "", qty: String(count)
     };
     editingCardGroupSig = signature;
     errorMsg = "";
@@ -554,7 +559,7 @@ function runApp(){
   }
   function cancelEditCardGroup(){
     editingCardGroupSig = null;
-    draft.formCard = { color:"", name:"", affiliation:"", status:"", seinenba:"", effect1:"", effect2:"", counterLabel:"", qty:"1" };
+    draft.formCard = { color:"", name:"", affiliation:"", status:"", seinenba:"", effect1:"", effect2:"", counterLabel:"", turnLimit:"", qty:"1" };
     render();
   }
   function removeDraftCardGroup(signature){
@@ -563,18 +568,19 @@ function runApp(){
     else render();
   }
   function cardsToBulkText(){
-    return draft.cards.map(c => [c.color,c.name,c.affiliation,c.status,c.seinenba,c.effect1,c.effect2,c.counterLabel||""].join("|")).join("\n");
+    return draft.cards.map(c => [c.color,c.name,c.affiliation,c.status,c.seinenba,c.effect1,c.effect2,c.counterLabel||"",c.turnLimit!=null?c.turnLimit:""].join("|")).join("\n");
   }
   function parseBulkText(text){
     const lines = text.split("\n").map(l=>l.trim()).filter(Boolean);
     const out = [];
     lines.forEach(line => {
       const parts = line.split("|").map(p => p.trim());
-      const [color="", name="", affiliation="", status="", seinenba="", effect1="", effect2="", counterLabel="", qtyStr=""] = parts;
+      const [color="", name="", affiliation="", status="", seinenba="", effect1="", effect2="", counterLabel="", turnLimitStr="", qtyStr=""] = parts;
       let qty = parseInt(qtyStr, 10);
       if(isNaN(qty) || qty < 1) qty = 1;
+      const turnLimitNum = parseInt(turnLimitStr, 10);
       for(let i=0;i<qty;i++){
-        out.push({ id: uid(), color, name, affiliation, status: parseInt(status,10) || 0, seinenba: parseInt(seinenba,10) || 0, effect1, effect2, counterLabel });
+        out.push({ id: uid(), color, name, affiliation, status: parseInt(status,10) || 0, seinenba: parseInt(seinenba,10) || 0, effect1, effect2, counterLabel, turnLimit: isNaN(turnLimitNum) ? null : turnLimitNum });
       }
     });
     return out;
@@ -1070,6 +1076,7 @@ function runApp(){
   // 第1段階: 初期手札6枚を配る(まだターンは始めない。マリガン待ち状態にする)
   async function maybeDealInitialHands(){
     if(mySeat !== "A" || gameInitInProgress) return;
+    if(sharedState.ended) return; // ゲーム終了直後の中途半端な状態で再配布しない
     const a = state.A, b = state.B;
     if(!a || !b || !a.started || !b.started) return;
     if(sharedState.dealt) return;
@@ -1098,6 +1105,7 @@ function runApp(){
   // 第2段階: 両者のマリガンが完了したら、正念場を抽選してターンを開始する
   async function maybeStartTurnsAfterMulligan(){
     if(mySeat !== "A" || gameInitInProgress) return;
+    if(sharedState.ended) return; // ゲーム終了直後の中途半端な状態でターンを開始しない
     const a = state.A, b = state.B;
     if(!a || !b || !sharedState.dealt || sharedState.gameInitialized) return;
     if(!a.mulliganDone || !b.mulliganDone) return;
@@ -1270,6 +1278,23 @@ function runApp(){
     addLog(s, `公開していた『${card.name}』を除外した`);
     modal = null;
     await saveSeat(mySeat, s); render();
+  }
+  async function giveRevealToOpponent(cardId){
+    const s = state[mySeat];
+    if(!s.revealSlot || s.revealSlot.id !== cardId) return;
+    const oppSeat = otherSeat(mySeat);
+    const oppData = state[oppSeat];
+    if(!oppData) return;
+    const card = s.revealSlot;
+    s.revealSlot = null;
+    addLog(s, `公開していた『${card.name}』を相手の手札に渡した`);
+    modal = null;
+    await saveSeat(mySeat, s);
+    const oppCopy = { ...oppData, hand: [...oppData.hand, card], log: [...(oppData.log||[])] };
+    addLog(oppCopy, `席${mySeat}から『${card.name}』を受け取り、手札に加わった`);
+    state[oppSeat] = oppCopy;
+    await saveSeat(oppSeat, oppCopy);
+    render();
   }
   async function playFromRevealToZone(cardId, zoneKey){
     const s = state[mySeat];
@@ -1481,7 +1506,7 @@ function runApp(){
           ${groups.map(g => { const c = g.sample; return `
             <div class="preview-cardline">
               <span class="swatch" style="background:${colorSwatch(c.color)};"></span>
-              <span style="flex:1;">${escapeHtml(c.name)} <span style="opacity:0.5;">/ ${escapeHtml(c.affiliation||"—")}</span>${c.counterLabel ? ` <span style="opacity:0.5;">/「${escapeHtml(c.counterLabel)}」カウンター</span>` : ""}</span>
+              <span style="flex:1;">${escapeHtml(c.name)} <span style="opacity:0.5;">/ ${escapeHtml(c.affiliation||"—")}</span>${c.counterLabel ? ` <span style="opacity:0.5;">/「${escapeHtml(c.counterLabel)}」カウンター</span>` : ""}${c.turnLimit!=null ? ` <span style="opacity:0.5;">/ ターン制限${c.turnLimit}</span>` : ""}</span>
               <span class="mono" style="opacity:0.7;">${c.status}(${fmtMod(c.seinenba)})</span>
               <span class="mono" style="opacity:0.85; font-weight:700;">×${g.count}</span>
             </div>
@@ -1562,7 +1587,7 @@ function runApp(){
         <span class="swatch" style="background:${colorSwatch(g.sample.color)};"></span>
         <span class="grow">
           <b>${escapeHtml(g.sample.name)}</b>
-          <span style="opacity:0.6;"> / ${escapeHtml(g.sample.affiliation||"—")} / ST ${g.sample.status}(${fmtMod(g.sample.seinenba)})${g.sample.counterLabel ? ` / 「${escapeHtml(g.sample.counterLabel)}」カウンター` : ""}</span>
+          <span style="opacity:0.6;"> / ${escapeHtml(g.sample.affiliation||"—")} / ST ${g.sample.status}(${fmtMod(g.sample.seinenba)})${g.sample.counterLabel ? ` / 「${escapeHtml(g.sample.counterLabel)}」カウンター` : ""}${g.sample.turnLimit!=null ? ` / ターン制限${g.sample.turnLimit}` : ""}</span>
           <span class="mono" style="opacity:0.7;"> ×${g.count}</span>
         </span>
         <span class="edit-link" data-edit-sig="${encodeURIComponent(g.sig)}">編集</span>
@@ -1610,8 +1635,9 @@ function runApp(){
             <div><label class="small-label">効果①(任意)</label><textarea id="fEffect1" style="min-height:60px;">${escapeHtml(f.effect1)}</textarea></div>
             <div><label class="small-label">効果②(任意)</label><textarea id="fEffect2" style="min-height:60px;">${escapeHtml(f.effect2)}</textarea></div>
           </div>
-          <div class="grid2 field-row">
-            <div><label class="small-label">カウンター名(任意・例: 海)</label><input type="text" id="fCounterLabel" value="${escapeHtml(f.counterLabel)}" placeholder="このカードにカウンターが乗らないなら空欄でOK"></div>
+          <div class="grid3 field-row">
+            <div><label class="small-label">カウンター名(任意・例: 海)</label><input type="text" id="fCounterLabel" value="${escapeHtml(f.counterLabel)}" placeholder="乗らないなら空欄でOK"></div>
+            <div><label class="small-label">ターン制限(任意)</label><input type="number" id="fTurnLimit" value="${escapeHtml(f.turnLimit)}" placeholder="例: 3(このターン以降で招来可)"></div>
             <div><label class="small-label">枚数(同じ内容のカードを一度に登録)</label><input type="number" id="fQty" value="${escapeHtml(f.qty)}" min="1" placeholder="1"></div>
           </div>
           <button class="small-add full" id="addCardBtn">${editingCardGroupSig ? "変更を保存する" : "+ このカードをデッキに追加"}</button>
@@ -1619,7 +1645,7 @@ function runApp(){
           <div class="built-list">${builtListHtml}</div>
         ` : `
           <div class="field-row">
-            <label class="small-label">1行1枚、「属性|名前|肩書|ステータス|正念場修正値|効果①|効果②|カウンター名|枚数」の順で入力(効果・カウンター名・枚数は省略可)</label>
+            <label class="small-label">1行1枚、「属性|名前|肩書|ステータス|正念場修正値|効果①|効果②|カウンター名|ターン制限|枚数」の順で入力(効果・カウンター名・ターン制限・枚数は省略可)</label>
             <textarea id="bulkInput" style="min-height:220px;">${escapeHtml(draft.bulkText)}</textarea>
           </div>
           <div class="hint">正念場修正値がマイナスの場合はそのまま「-400」のように入力してください。枚数を省略すると1枚として扱われます。</div>
@@ -1645,7 +1671,7 @@ function runApp(){
       bindFormInputs([
         ["fColor","color"],["fStatus","status"],["fSeinenba","seinenba"],
         ["fAffiliation","affiliation"],["fName","name"],["fEffect1","effect1"],["fEffect2","effect2"],
-        ["fCounterLabel","counterLabel"],["fQty","qty"]
+        ["fCounterLabel","counterLabel"],["fTurnLimit","turnLimit"],["fQty","qty"]
       ], draft.formCard);
       document.getElementById("addCardBtn").onclick = addDraftCard;
       document.querySelectorAll(".del").forEach(el => { el.onclick = () => removeDraftCardGroup(decodeURIComponent(el.getAttribute("data-sig"))); });
@@ -1756,6 +1782,10 @@ function runApp(){
             <div class="info-col">
               <div class="zone-slot-label" style="text-align:left; margin-bottom:6px;">手札 ${seatData.hand.length}枚</div>
               <div class="cards-row">${handCards || `<div class="empty-note">なし</div>`}</div>
+            </div>
+            <div class="info-col">
+              <div class="zone-slot-label" style="text-align:left; margin-bottom:6px;">山札</div>
+              <div class="deckbox"><div><div class="num mono">${seatData.deck.length}</div><div class="lbl">枚</div></div></div>
             </div>
           </div>
         </div>
@@ -1879,6 +1909,7 @@ function runApp(){
     ` : "";
     const effectLines = inlineEffect ? effectParts.map(p => `<div class="ceffect">${escapeHtml(p)}</div>`).join("") : "";
     const dragAttrs = dragSource ? `draggable="true" ondragstart="onCardDragStart(event,'${card.id}','${dragSource}')"` : "";
+    const turnLimitBadge = card.turnLimit != null ? `<div class="turn-limit-badge">ターン${card.turnLimit}〜</div>` : "";
     return `
       <div class="card${dragSource ? ' draggable' : ''}" ${dragAttrs} onclick="${onclickName}('${card.id}')">
         <div class="toprow"><span class="swatch" style="background:${colorSwatch(card.color)};"></span>${statusHtml(card)}</div>
@@ -1887,6 +1918,7 @@ function runApp(){
           <span class="caff">${escapeHtml(card.affiliation || "")}</span>
           ${effectIcon}
         </div>
+        ${turnLimitBadge}
         ${effectLines}
         ${counterRow}
         ${statAdjustRow}
@@ -2062,7 +2094,7 @@ function runApp(){
     const myHandCards = mine.hand.map(c => cardHtml(c, "openHandCardMenu", mySeatKey, true, "hand", true)).join("");
     const isMyTurn = sharedState.currentTurn === mySeatKey;
     const gameOver = bothStarted && sharedState.gameInitialized && (mine.hp <= 0 || opp.hp <= 0);
-    const mulliganPhase = bothStarted && sharedState.dealt && !sharedState.gameInitialized;
+    const mulliganPhase = bothStarted && sharedState.dealt && !sharedState.gameInitialized && !sharedState.ended;
 
     let mergedLog = [];
     if(mine.log) mergedLog = mergedLog.concat(mine.log.map(e => ({...e, who: mySeatKey})));
@@ -2099,6 +2131,10 @@ function runApp(){
             <div class="info-col">
               <div class="zone-slot-label" style="text-align:left; margin-bottom:6px;">手札 ${opp ? opp.hand.length : 0}枚</div>
               <div class="cards-row" style="min-height:auto;">${oppHandBacks || `<div class="empty-note">なし</div>`}</div>
+            </div>
+            <div class="info-col">
+              <div class="zone-slot-label" style="text-align:left; margin-bottom:6px;">山札</div>
+              <div class="deckbox"><div><div class="num mono">${opp ? opp.deck.length : 0}</div><div class="lbl">枚</div></div></div>
             </div>
           </div>
         </div>
@@ -2204,6 +2240,7 @@ function runApp(){
     return `
       <div class="modal-detail-row"><b>${escapeHtml(card.name)}</b> ${card.affiliation ? `／ ${escapeHtml(card.affiliation)}` : ""}</div>
       <div class="modal-detail-row">属性: ${escapeHtml(card.color || "—")} ／ ${statusHtml(card, seat)}</div>
+      ${card.turnLimit != null ? `<div class="modal-detail-row">ターン制限: ターン${card.turnLimit}以降でメインゾーンに招来可</div>` : ""}
       ${card.effect1 ? `<div class="modal-detail-row">①${escapeHtml(card.effect1)}</div>` : ""}
       ${card.effect2 ? `<div class="modal-detail-row">②${escapeHtml(card.effect2)}</div>` : ""}
       ${card.counterLabel ? `
@@ -2388,12 +2425,14 @@ function runApp(){
       return overlayWrap(`
         <h3 class="display">カード詳細</h3>${cardDetailBlock(card, mySeatKey, false)}
         <div class="row" style="flex-wrap:wrap; margin-top:14px;">
+          <button class="act" id="mRevealToOpponent" style="color:var(--brass); border-color:var(--brass); font-weight:700;">相手の手札に渡す</button>
           <button class="act" id="mRevealToHand">手札に戻す</button>
           <button class="act" id="mRevealToField">緊急招来する</button>
           <button class="act" id="mRevealToDeck">山札に戻す</button>
           <button class="act" id="mRevealToDiscard">墓地に送る</button>
           <button class="act" id="mRevealToExclude" style="color:#e2a08a;">除外する</button>
         </div>
+        <div class="hint">「相手の手札に渡す」を選ぶと、以降このカードは相手が操作できるようになります。</div>
         <div style="margin-top:14px;"><button class="ghost" id="modalCancel">閉じる</button></div>
       `);
     }
@@ -2441,6 +2480,7 @@ function runApp(){
     if(c("mRevealToField")) c("mRevealToField").onclick = () => openChooseZone(modal.cardId, "reveal");
     if(c("mRevealToDeck")) c("mRevealToDeck").onclick = () => sendRevealToDeck(modal.cardId);
     if(c("mRevealToExclude")) c("mRevealToExclude").onclick = () => sendRevealToExclude(modal.cardId);
+    if(c("mRevealToOpponent")) c("mRevealToOpponent").onclick = () => giveRevealToOpponent(modal.cardId);
     if(c("mBackToExcludeList")) c("mBackToExcludeList").onclick = () => { modal = { type: "peekExclude", seat: mySeat }; render(); };
     if(c("mSearchToHand")) c("mSearchToHand").onclick = () => pickFromSearch(modal.cardId);
     if(c("mSearchToDiscard")) c("mSearchToDiscard").onclick = () => sendSearchToDiscard(modal.cardId);
